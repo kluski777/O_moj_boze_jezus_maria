@@ -52,7 +52,7 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
 
         self.sin_vals = np.linspace(-1, 1, num=9)
         self.distance_vals = np.linspace(0, 250, num=30)
-        self.checkpoint_distance_vals = np.linspace(-100, 100, num=100)
+        self.checkpoint_distance_vals = np.linspace(-50, 50, num=100)
 
     # wszystko musi byc lokalne
     def prepare_state(self, state) -> np.ndarray:
@@ -66,7 +66,7 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
         else:
             distances = np.array(state[0]) / self.distance_vals[-1]
             car_distances = np.array(state[1]) / self.distance_vals[-1]
-            sin_angle = np.array(state[2]) / self.sin_vals[-1]
+            sin_angle = np.array([state[2]]) / self.sin_vals[-1]
             checkpoint_x_dist = np.array([self.x_diff]) / self.checkpoint_distance_vals[-1]
             checkpoint_y_dist = np.array([self.y_diff]) / self.checkpoint_distance_vals[-1]
 
@@ -132,19 +132,18 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
         previous_reward = current_q[action_idx]
 
         loss = self.loss(expected_reward, previous_reward) / self.update_frequency
-        loss.backward() # UWAGA BO BYLO 1.0
+        loss.backward()
         
         self.update_counter += 1
 
         if self.update_counter >= self.update_frequency:
             self.update_counter = 0
-            
             torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
             self.optim.step()
             self.loss_record.append( loss.item() )
     
     def load_weights(self, i: int):
-        self.network.load_state_dict(torch.load(f"model_{i}.pth"))
+        self.network.load_state_dict(torch.load(f"model_{i}_dobry.pth"))
 
     def save_model(self, i: int):
         torch.save(self.network.state_dict(), f"model_{i}.pth")

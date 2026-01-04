@@ -7,6 +7,7 @@ from abstract_car import AbstractCar
 from utils import scale_image
 from itertools import permutations
 import numpy as np
+import os
 
 reload(bots)
 #Based on https://github.com/techwithtim/Pygame-Car-Racer
@@ -174,8 +175,8 @@ class Game:
 
             # kara za zle ustawienie sie do kierunku jazdy
             cos_angle = np.cos(np.radians(car.angle - car.angle_to_checkpoint))
-            velocity = abs(prev_distance - curr_distance)
-            proximity_reward = velocity * cos_angle
+            cos_angle -= 1
+            velocity_reward = abs(prev_distance - curr_distance)
 
             #TODO ktory to sensor w lewo a ktory to sensor w prawo
             _, distances = car.get_rays_and_distances(TRACK_BORDER_MASK)
@@ -190,15 +191,16 @@ class Game:
 
             # kara za kolizje
             collision = car.collide(TRACK_BORDER_MASK)
-            collision_punishment = 0.0 if collision is None else -2.0
+            collision_punishment = 0.0 if collision is None else -1.0
 
             # if i == 1 and show_stats:
             #     print(f'\r{checkpoint_reward=}, {proximity_reward=}, {collision_punishment=}, {car.epsilon=}', flush=True, end='')
 
             reward = checkpoint_reward + \
-                proximity_reward + \
-                collision_punishment - \
-                (distance_from_the_wall / 20) ** 2
+                cos_angle + \
+                velocity_reward + \
+                collision_punishment
+                # (distance_from_the_wall / 20) ** 2
 
             # print(f'\r{(distance_from_the_wall / 100) ** 2}, {collision_punishment=}, {proximity_reward=}, {checkpoint_reward=}', flush=True, end='')
 
@@ -276,8 +278,8 @@ def main():
     alpha = 1.5e-2
     epsilon_decay_1 = 1e-5
     min_epsilon_1 = 0.3
-    update_freq_1 = 1
-    digitize_1 = True
+    update_freq_1 = 5
+    digitize_1 = False
 
     epsilon2 = 1.0
     gamma2 = 0.99
@@ -304,7 +306,8 @@ def main():
             alpha, 
             epsilon_decay_1, 
             min_epsilon_1, 
-            update_freq_1
+            update_freq_1,
+            digitize_1
         ),
         bots.FunctionApproximationCar(
             "P2", 
@@ -313,7 +316,8 @@ def main():
             alpha2,  
             epsilon_decay_2, 
             min_epsilon_2, 
-            update_freq_2
+            update_freq_2,
+            digitize_2
         ),
         bots.FunctionApproximationCar(
             "P3", 
@@ -322,7 +326,8 @@ def main():
             alpha3, 
             epsilon_decay_3, 
             min_epsilon_3, 
-            update_freq_3
+            update_freq_3,
+            digitize_3
         ),
         # bots.FunctionApproximationCar("P4", epsilon, gamma, alpha, TRACK.get_width(), TRACK.get_height()),
     ]
@@ -333,8 +338,8 @@ def main():
     perm = list(permutations(players))
 
     # Wczytywanie wag
-    # for i, p in enumerate(players):
-    #     p.load_weights(i)
+    for i, p in enumerate(players):
+        p.load_weights(i)
 
     for k in range(2):
         print('Training' if k == 0 else 'Testing')
