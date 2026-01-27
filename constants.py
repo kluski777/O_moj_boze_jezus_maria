@@ -1,14 +1,14 @@
-TRENING_TIME = 10 * 60
+TRENING_TIME = 2.5 * 60
 EPSILON_STOP = 0.1
-SINGLE_GAME_STOP_TIME = 15
+SINGLE_GAME_STOP_TIME = 12
 SHOWING_GAME_STOP_TIME = 120
 COLISION_PUNISHMENT = 4.0
 EXISTANCE_PUNISHMENT = 1.0
 
 epsilon_1 = 1.5
 gamma_1 = 0.99
-alpha_1 = 9e-3
-epsilon_decay_1 = 7.5e-6
+alpha_1 = 7.5e-2
+epsilon_decay_1 = 2e-5
 min_epsilon_1 = 0.1
 
 epsilon2 = 1.0

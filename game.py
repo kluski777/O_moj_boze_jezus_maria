@@ -163,7 +163,7 @@ class Game:
             # car.vel / car.max_vel
         ]
 
-    def move_cars(self):
+    def move_cars(self, show):
         """Handle car movements."""
         # wszystko chce zrobic dyskretnym na DQLearning
 
@@ -192,15 +192,10 @@ class Game:
             if abs(state[1]) > 0.5: # za odwrocenie wzledem toru jazdy
                 sin_punish = abs(state[1]) - 0.5
 
-            car.to_plot_dict['velocity_reward'].append(velocity_reward)
-            car.to_plot_dict['cos_angle'].append(cos_angle)
+            action_reward = velocity_reward + diff_reward + sin_punish + bots.action_rewards(state, action, cos_angle, car, show)
 
-            action_reward = bots.action_rewards(state, action)
-
-            reward = velocity_reward - diff_reward - sin_punish + action_reward
-            car.to_plot_dict['reward_combined'].append(reward)
-
-            print(f'\r{velocity_reward=:20.2f}, {sin_punish=:15.2f}, {action_reward=}. {car.epsilon=:20.5f}', flush=True, end='')
+            reward = action_reward
+            # print(f'\r{velocity_reward=:20.2f}, {sin_punish=:15.2f}, {action_reward=}. {car.epsilon=:20.5f}', flush=True, end='')
 
             next_state = self.get_state(car)
             car.update_weights(state, action, reward, next_state)
@@ -231,7 +226,7 @@ class Game:
                 if event.type == pygame.QUIT:
                     self.running = False
 
-            self.move_cars()
+            self.move_cars(show)
             self.check_collisions()
             finish_lines = self.check_finish_line()
             if len(finish_lines) != 0:

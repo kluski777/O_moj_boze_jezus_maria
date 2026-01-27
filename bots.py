@@ -5,47 +5,99 @@ import torch.nn as nn
 import numpy as np
 import pygame
 import torch
+from constants import *
 
-def action_rewards(state: list, action: str) -> float:
+def action_rewards(state: list, action: str, cos: float, car, show: bool) -> float:
     reward = 0.0
-    
+    vel = car.vel * cos
+
     distances, sin = state
     right, right_front, front, left_front, left = distances
-    if action == 'forward':
-        if front < 0.2:
-            reward -= 1.0
-        elif front > 0.5:
-            reward += 1
-    elif action == 'stop':
-        if front > 0.5:
-            reward -= 1.0
-        elif front < 0.2:
-            reward += 0.05 # raczej trzeba skrecac
-    elif action == 'left':
-        if left - right > 0.2 or left_front - right_front > 0.2:
+
+    # nie naprawilem tego bledu krecenia sie
+    if action == 'left':
+        if left_front > right_front + 0.05:  # wiecej miejsca z lewej do przodu
             reward += 2.0
-        elif abs(left - right) < 0.2 or abs(left_front - right_front) < 0.2:
-            reward -= 0.5 # po co skreca jak jest na srodku
         else:
-            reward -= 2.5 # jedzie na bande od razu kara
-    elif action == 'right':
-        if right - left > 0.2 or right_front - left_front > 0.2:
-            reward += 2.0
-        elif abs(left - right) < 0.2 or abs(left_front - right_front) < 0.2:
-            reward -= 0.5 # po co skreca jak jest na srodku
-        else:
-            reward -= 2.5 # jedzie na bande od razu kara
-    elif action == 'backward':
-        if front < 0.1:
+            reward -= 2.0
+        if left > right + 0.05:              # wiecej miejsca z lewej
             reward += 1.0
-        else: 
-            reward -= 10.0
+        else:
+            reward -= 1.0
+        
+        if front > right:                   # Moglby jechac prosto
+            reward -= 1.0
+        if front > right_front:             # Moglby jechac prosto
+            reward -= 1.0
+        
+        if left < 0.15:
+            reward += 1.0
+        elif left > 0.3:
+            reward -= 2.5
+        
+        if sin > 0.4:
+            reward -= 5.0
+        elif sin < 0.0:
+            reward += 0.5
+
     if action == 'right':
-        reward += 0.2 if sin > 0.5 else -2.0
-    elif action == 'left':
-        reward += 0.2 if sin < -0.5 else -2.0
-    if abs(sin) > 0.5 and action != 'right' and action != 'left':
-        reward -= 2.5
+        if right_front > left_front + 0.05:  # Po prawej wiecej miejsca jest
+            reward += 2.0
+        else:
+            reward -= 2.0
+        if right > left + 0.05:              # Po prawej wiecej miejsca
+            reward += 1.0
+        else:
+            reward -= 1.0
+
+        if front > right:
+            reward -= 1.0
+        if front > right_front:
+            reward -= 1.0
+        
+        if right < 0.15:
+            reward += 1.0
+        elif right > 0.3:
+            reward -= 2.5
+
+        if sin < -0.4:
+            reward -= 5.0
+        elif sin > 0.0:
+            reward += 0.5
+    
+    if action == 'forward': # wydaje mi sie ze nie bedzie jezdzic do przodu
+        if abs(sin) > 0.3:
+            reward -= 2.5                   # COFA SIE
+        if left_front > front:
+            reward -= 0.2
+        if right_front > front:
+            reward -= 0.2
+        if left > front:
+            reward -= 2.5                   # stoi lub jedzie bokiem do toru
+        if right > front:
+            reward -= 2.5                   # stoi lub jedzie bokiem do toru
+        if front > 0.55:
+            reward += 2.0                   # jedz adam jedz
+        reward += vel
+
+    if action == 'stop':
+        if front + 0.2 > left or front + 0.2 > right:
+            reward += 0.5
+        if vel < 1.0:
+            reward -= 10.0                  # stoi i sie gapi
+        if vel > 3.0:
+            reward += 0.75
+
+    if action == 'backward':
+        if abs(sin) < 0.4:
+            reward -= 5.0
+        if front > 0.2:
+            reward -= 10.0
+        if abs(sin) > 0.4:
+            reward += 0.25
+
+    if show:
+        print(f'{action:10}, {reward:10.2f}')
 
     return reward
 
@@ -97,12 +149,6 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
             # [velocity]
         ])
         
-        # indx = 0 jest na prawo, w praktyce potrzebuje indeksow 0, -1, -2, -3, -4 -> tylko 5 kierunkow
-        for i, distance in enumerate(distances):
-            self.to_plot_dict[f'{i}_distance'].append(distance)
-        self.to_plot_dict['sin'].append(sin_angle)
-        # self.to_plot_dict['vel'].append(velocity)
-
         return flat_state
 
     def get_best_action(self, state: list) -> str:
