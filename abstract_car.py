@@ -250,7 +250,7 @@ class AbstractCar:
             # Maly threshold czasem nie zalicza nawet jak samochod przejedzie dalej
             # Duzy daje problem z katami
             # gdyby to dzialalo jakby w poprzek byloby idealnie
-            if distance < 60:
+            if distance < 35:
                 self.checkpoint_index += 1
                 self.progress_distance += distance
 

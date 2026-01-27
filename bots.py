@@ -6,6 +6,50 @@ import numpy as np
 import pygame
 import torch
 
+def action_rewards(state: list, action: str) -> float:
+    reward = 0.0
+    
+    distances, sin = state
+    right, right_front, front, left_front, left = distances
+    if action == 'forward':
+        if front < 0.2:
+            reward -= 1.0
+        elif front > 0.5:
+            reward += 1
+    elif action == 'stop':
+        if front > 0.5:
+            reward -= 1.0
+        elif front < 0.2:
+            reward += 0.05 # raczej trzeba skrecac
+    elif action == 'left':
+        if left - right > 0.2 or left_front - right_front > 0.2:
+            reward += 2.0
+        elif abs(left - right) < 0.2 or abs(left_front - right_front) < 0.2:
+            reward -= 0.5 # po co skreca jak jest na srodku
+        else:
+            reward -= 2.5 # jedzie na bande od razu kara
+    elif action == 'right':
+        if right - left > 0.2 or right_front - left_front > 0.2:
+            reward += 2.0
+        elif abs(left - right) < 0.2 or abs(left_front - right_front) < 0.2:
+            reward -= 0.5 # po co skreca jak jest na srodku
+        else:
+            reward -= 2.5 # jedzie na bande od razu kara
+    elif action == 'backward':
+        if front < 0.1:
+            reward += 1.0
+        else: 
+            reward -= 10.0
+    if action == 'right':
+        reward += 0.2 if sin > 0.5 else -2.0
+    elif action == 'left':
+        reward += 0.2 if sin < -0.5 else -2.0
+    if abs(sin) > 0.5 and action != 'right' and action != 'left':
+        reward -= 2.5
+
+    return reward
+
+
 class FunctionApproximationCar(AbstractCar, nn.Module):
     def __init__(
             self, 
@@ -29,22 +73,21 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
         self.all_possible_actions = ['forward', 'backward', 'stop', 'left', 'right']
 
         self.network = nn.Sequential(
-            nn.LazyLinear(16),
-            nn.ReLU(),
-            nn.LazyLinear(16),
-            nn.ReLU(),
-            nn.LazyLinear(5),
+            nn.LazyLinear(64), nn.ReLU(),
+            nn.LazyLinear(64), nn.ReLU(),
+            nn.LazyLinear(64), nn.ReLU(),
+            nn.LazyLinear(len(self.all_possible_actions))
         )
         
-        self.loss = nn.MSELoss() # ty no nie wiem czy MSE jest lepsze idk tbh
-        # self.loss = nn.SmoothL1Loss() # nn.MSELoss - zeby walczyc z szumem
+        # self.loss = nn.MSELoss() # ty no nie wiem czy MSE jest lepsze idk tbh
+        self.loss = nn.SmoothL1Loss() # nn.MSELoss - zeby walczyc z szumem
         self.optim = torch.optim.SGD(self.parameters(), alpha)
 
     # wszystko musi byc lokalne
     def prepare_state(self, state) -> np.ndarray:
         distances = state[0]
         # car_distance = state[1]
-        sin_angle = state[2]
+        sin_angle = state[1]
         # velocity = state[3]
 
         flat_state = np.concatenate([
@@ -104,7 +147,6 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
             next_q = self.estimate_q(next_state)
             max_next_q = torch.max(next_q)
             expected_reward = torch.tensor(reward, dtype=torch.float32) + self.gamma * max_next_q
-        self.update_counter += 1
 
         current_q = self.estimate_q(state)
         action_idx = self.all_possible_actions.index(action)
@@ -118,8 +160,6 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
         self.optim.step()
         self.optim.zero_grad()  # Must clear here
         
-        # if self.update_counter % self.target_update_freq == 0:
-            # self.target_network.load_state_dict(self.network.state_dict())
 
 
     def load_weights(self, i: int):

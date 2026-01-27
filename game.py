@@ -146,7 +146,7 @@ class Game:
         angle_diff = (car.angle - car.angle_to_checkpoint + 180) % 360 - 180
         sin_diff = np.sin(np.radians(angle_diff / 2))
 
-        # To jest jakos do 200 ograniczone
+        # rzadko wychodzi poza 200
         distances = np.array(distances) / 200
         car_distances = np.array(car_distances) / 200
 
@@ -158,9 +158,9 @@ class Game:
         # MINIMALIZM TUTAJ JAK NAJMNIEJ TEGO DAWAJ
         return [
             distances[front_indices],
-            car_distances[front_indices],
+            # car_distances[front_indices],
             sin_diff,
-            car.vel / car.max_vel
+            # car.vel / car.max_vel
         ]
 
     def move_cars(self):
@@ -174,33 +174,33 @@ class Game:
             state = self.get_state(car)
             
             action = car.choose_action(state)
-            car.update_progress(CHECKPOINTS)
             car.perform_action(action)
             car.update_progress(CHECKPOINTS)
             
-            # kara lub nagroda za zle ustawienie sie do kierunku jazdy
             cos_angle = np.cos(np.radians(car.angle - car.angle_to_checkpoint))
-            #* Do poczatkowego uczenia jest przydatna
+            
+            distances, sin = state
+            left, right = distances[0], distances[-1]
 
-            distance, _, _, _ = state
-            right_distance, left_distance = distance[0], distance[-1]
-
+            #! idealna nagroda to nagroda ktora jest ciagla.
             # nagroda za jazde naprzod w kierunku checkpointa - powinno niezle dzialac
             velocity_reward = cos_angle * car.vel
-            if velocity_reward < 0.02: # tj. v = 0.16 w jednostkach bezwzglednych
-                velocity_reward -= 3.0
 
-            # wywalic kare za kolizje i dac mu kare za brak jazdy na srodku toru
-            collision_detection = COLISION_PUNISHMENT if car.collide(TRACK_BORDER_MASK) else 0.0
-            # distance_diff = abs(right_distance - left_distance)
-            
+            diff_reward = abs(left - right)
+
+            sin_punish = 0.0
+            if abs(state[1]) > 0.5: # za odwrocenie wzledem toru jazdy
+                sin_punish = abs(state[1]) - 0.5
+
             car.to_plot_dict['velocity_reward'].append(velocity_reward)
             car.to_plot_dict['cos_angle'].append(cos_angle)
 
-            reward = velocity_reward - collision_detection - EXISTANCE_PUNISHMENT
+            action_reward = bots.action_rewards(state, action)
+
+            reward = velocity_reward - diff_reward - sin_punish + action_reward
             car.to_plot_dict['reward_combined'].append(reward)
 
-            print(f'\r{velocity_reward=:20.2f}, {collision_detection=:15.2f}. {car.epsilon=:20.5f}', flush=True, end='')
+            print(f'\r{velocity_reward=:20.2f}, {sin_punish=:15.2f}, {action_reward=}. {car.epsilon=:20.5f}', flush=True, end='')
 
             next_state = self.get_state(car)
             car.update_weights(state, action, reward, next_state)
@@ -294,7 +294,7 @@ def main():
     # for i, p in enumerate(players):
     #     p.load_weights(i)
     start_before = time()
-    last_loop = True
+    last_loop = False
     game_counter = 0
 
 
