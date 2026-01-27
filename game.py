@@ -282,7 +282,7 @@ def main():
     ]
 
     for i, p in enumerate(players):
-        # p.load_weights(i % 2)
+        p.load_weights(i % 2)
         final_results[p.get_name()] = 0
 
     # Wczytywanie wag

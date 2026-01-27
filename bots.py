@@ -46,6 +46,9 @@ def action_rewards(state: list, action: str, cos: float, car, show: bool) -> flo
             reward -= 50.0
         elif sin < -0.4:
             reward += GOOD_SHARP_TURN * 5
+    if action != 'left' and (right < 0.12 or right_front < 0.12):
+        reward -= 10.0
+
 
     if action == 'right':
         if right_front > left_front:  # Po prawej wiecej miejsca jest
@@ -75,7 +78,9 @@ def action_rewards(state: list, action: str, cos: float, car, show: bool) -> flo
             reward -= 50.0
         elif sin > 0.4:
             reward += GOOD_SHARP_TURN * 5
-    
+    if action != 'right' and (left < 0.12 or left_front < 0.12):
+        reward -= 10.0
+
     if action == 'forward':
         if abs(sin) > 0.7: # odchylony o wiecej niz 60 stopni 
             reward -= 420                   # COFA SIE
@@ -108,6 +113,8 @@ def action_rewards(state: list, action: str, cos: float, car, show: bool) -> flo
             reward -= 10.0
         if abs(sin) > 0.4:
             reward += 0.25
+
+    # print(f'{left=:10.2f}, {left_front=:10.2f}, {right=:10.2f}, {right_front=:10.2f}')
 
     if show:
         print(f'{action:10}, {reward:10.2f}, {car.vel:10.2f}')

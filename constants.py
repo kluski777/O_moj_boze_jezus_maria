@@ -1,4 +1,4 @@
-TRENING_TIME = 2.5 * 60
+TRENING_TIME = 20 * 60
 EPSILON_STOP = 0.1
 SINGLE_GAME_STOP_TIME = 12
 SHOWING_GAME_STOP_TIME = 120
@@ -12,10 +12,10 @@ TURN_INSTEAD_OF_FORWARD = 2.0
 TOLERATION = 0.3
 PROXIMITY = 0.2
 
-epsilon_1 = 1.5
+epsilon_1 = 1.1
 gamma_1 = 0.99
-alpha_1 = 7.5e-2
-epsilon_decay_1 = 2e-5
+alpha_1 = 5e-2
+epsilon_decay_1 = 1e-6
 min_epsilon_1 = 0.1
 
 epsilon2 = 1.0
