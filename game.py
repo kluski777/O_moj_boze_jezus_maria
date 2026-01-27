@@ -1,15 +1,17 @@
 import matplotlib.pyplot as plt
+from constants import *
 from time import time
 from importlib import reload
 import pygame
-import bots
+import numpy as np
 from abstract_car import AbstractCar
 from utils import scale_image
-from itertools import permutations
-import numpy as np
-import os
+import random
+import approximation
+import bots
 
 reload(bots)
+reload(approximation)
 #Based on https://github.com/techwithtim/Pygame-Car-Racer
 
 pygame.init()
@@ -42,9 +44,6 @@ FPS = 150
 track_path =  [(175, 119), (110, 70), (56, 133), (70, 481), (318, 731), (404, 680), (418, 521), (507, 475), (600, 551), (613, 715), (736, 713),
         (734, 399), (611, 357), (409, 343), (433, 257), (697, 258), (738, 123), (581, 71), (303, 78), (275, 377), (176, 388), (178, 260)]
 
-show_every_i = 1
-lasting = 15 * 60 # czas trenowania
-velocity_scaler = 0.0
 
 # Interpolate evenly spaced checkpoints
 def generate_checkpoints(track_path, num_checkpoints=100):
@@ -70,8 +69,9 @@ def draw_checkpoints(win, checkpoints, color=(0, 255, 0)):
 
 
 class Game:
-    def __init__(self, width, height, fps=60):
-        self.win = pygame.display.set_mode((width, height))
+    def __init__(self, width, height, fps=60, show=False):
+        flag = pygame.SHOWN if show else pygame.HIDDEN
+        self.win = pygame.display.set_mode((width, height), flag)
         pygame.display.set_caption("Racing Game")
         self.clock = pygame.time.Clock()
         self.fps = fps
@@ -130,7 +130,7 @@ class Game:
 
         for car in self.cars:
             finish_poi_collide = car.collide(FINISH_MASK, *FINISH_POSITION)
-            if finish_poi_collide != None:
+            if finish_poi_collide is not None:
                 if finish_poi_collide[1] == 0:
                     car.bounce()
                 else:
@@ -142,20 +142,30 @@ class Game:
     def get_state(self, car) -> list:
         _, distances = car.get_rays_and_distances(TRACK_BORDER_MASK)
         car_distances = car.get_distances_to_cars(self.cars)
-        sin_diff = np.sin(np.radians(car.angle - car.angle_to_checkpoint))
+        # sin generalnie musi byc w range'u od -1 do 1 i dla tego kodziku jest
+        angle_diff = (car.angle - car.angle_to_checkpoint + 180) % 360 - 180
+        sin_diff = np.sin(np.radians(angle_diff / 2))
 
-        # niby max length raya to 1000 ale dam 500
-        distances = np.array(distances) / 500
-        car_distances = np.array(car_distances) / 500
+        # To jest jakos do 200 ograniczone
+        distances = np.array(distances) / 200
+        car_distances = np.array(car_distances) / 200
 
+        car.to_plot_dict['x'].append(car.x)
+        car.to_plot_dict['y'].append(car.y)
+
+        front_indices = [0, -1, -2, -3, -4]
+
+        # MINIMALIZM TUTAJ JAK NAJMNIEJ TEGO DAWAJ
         return [
-            distances, 
-            car_distances,
-            sin_diff
+            distances[front_indices],
+            car_distances[front_indices],
+            sin_diff,
+            car.vel / car.max_vel
         ]
 
-    def move_cars(self, show_stats: bool):
+    def move_cars(self):
         """Handle car movements."""
+        # wszystko chce zrobic dyskretnym na DQLearning
 
         for car in self.cars:
             car.update_progress(CHECKPOINTS)
@@ -163,50 +173,37 @@ class Game:
         for i, car in enumerate(self.cars):
             state = self.get_state(car)
             
-            prev_distance = car.progress_distance
             action = car.choose_action(state)
             car.update_progress(CHECKPOINTS)
-            prev_index, _ = car.get_progress()
-            
-            curr_distance = car.progress_distance
             car.perform_action(action)
             car.update_progress(CHECKPOINTS)
-            current_index, _ = car.get_progress()
-
-            # kara za zle ustawienie sie do kierunku jazdy
+            
+            # kara lub nagroda za zle ustawienie sie do kierunku jazdy
             cos_angle = np.cos(np.radians(car.angle - car.angle_to_checkpoint))
-            cos_angle -= 1
-            velocity_reward = abs(prev_distance - curr_distance)
+            #* Do poczatkowego uczenia jest przydatna
 
-            #TODO ktory to sensor w lewo a ktory to sensor w prawo
-            _, distances = car.get_rays_and_distances(TRACK_BORDER_MASK)
-            left_distance = distances[0]
-            right_distance = distances[4]
-            distance_from_the_wall = abs(left_distance - right_distance)
+            distance, _, _, _ = state
+            right_distance, left_distance = distance[0], distance[-1]
 
-            # nagroda za to jak duza czesc toru pokryl
-            checkpoint_reward = 0.0
-            if prev_index != current_index:
-                checkpoint_reward = 15.0
+            # nagroda za jazde naprzod w kierunku checkpointa - powinno niezle dzialac
+            velocity_reward = cos_angle * car.vel
+            if velocity_reward < 0.02: # tj. v = 0.16 w jednostkach bezwzglednych
+                velocity_reward -= 3.0
 
-            # kara za kolizje
-            collision = car.collide(TRACK_BORDER_MASK)
-            collision_punishment = 0.0 if collision is None else -1.0
+            # wywalic kare za kolizje i dac mu kare za brak jazdy na srodku toru
+            collision_detection = COLISION_PUNISHMENT if car.collide(TRACK_BORDER_MASK) else 0.0
+            # distance_diff = abs(right_distance - left_distance)
+            
+            car.to_plot_dict['velocity_reward'].append(velocity_reward)
+            car.to_plot_dict['cos_angle'].append(cos_angle)
 
-            # if i == 1 and show_stats:
-            #     print(f'\r{checkpoint_reward=}, {proximity_reward=}, {collision_punishment=}, {car.epsilon=}', flush=True, end='')
+            reward = velocity_reward - collision_detection - EXISTANCE_PUNISHMENT
+            car.to_plot_dict['reward_combined'].append(reward)
 
-            reward = checkpoint_reward + \
-                cos_angle + \
-                velocity_reward + \
-                collision_punishment
-                # (distance_from_the_wall / 20) ** 2
-
-            # print(f'\r{(distance_from_the_wall / 100) ** 2}, {collision_punishment=}, {proximity_reward=}, {checkpoint_reward=}', flush=True, end='')
+            print(f'\r{velocity_reward=:20.2f}, {collision_detection=:15.2f}. {car.epsilon=:20.5f}', flush=True, end='')
 
             next_state = self.get_state(car)
             car.update_weights(state, action, reward, next_state)
-            car.save(checkpoint_reward, cos_angle, collision_punishment)
 
     def run(self, show=False) -> list:
         """Main game loop."""
@@ -216,12 +213,12 @@ class Game:
 
         loop = 0
 
-        while self.running and len(self.cars) != 0 and time_passed < lasting:
-            print(f'\r{time_passed / lasting * 100 :.2f}%', flush=True, end='')
+        while self.running and len(self.cars) != 0 and time_passed < SINGLE_GAME_STOP_TIME:
+            # print(f'\r{time_passed / SINGLE_GAME_STOP_TIME * 100 :.2f}%, Epsilon={self.cars[0].epsilon}', flush=True, end='')
             # self.clock.tick(self.fps)
             loop += 1
 
-            if loop % show_every_i == 0 and show:
+            if show:
                 for i, car in enumerate(self.cars):
                     draw_checkpoints(
                         self.win, 
@@ -234,7 +231,7 @@ class Game:
                 if event.type == pygame.QUIT:
                     self.running = False
 
-            self.move_cars(show)
+            self.move_cars()
             self.check_collisions()
             finish_lines = self.check_finish_line()
             if len(finish_lines) != 0:
@@ -248,129 +245,96 @@ class Game:
         print("Game over!")
         print(who_finished_first)
         return who_finished_first
-
-def save_ways(players, num_circuit: int):
-    plt.title(f'loss record for all cars, circuit={num_circuit}')
-    for i, car in enumerate(players):
-        plt.plot(car.loss_record, 'o', markersize=1, label=f'{i+1}')
-    plt.xlabel('epoch')
-    plt.ylabel('loss')
-    plt.legend()
-    plt.savefig(f'./loss_{num_circuit}.png')
-    plt.clf()
-    plt.close('all')
-
-    plt.title(f'log10 loss record for all cars, circuit={num_circuit}')
-    for i, car in enumerate(players):
-        plt.plot(np.log10(np.array(car.loss_record)+1e-8), 'o', markersize=1, label=f'{i+1}')
-    plt.legend()
-    plt.xlabel('epoch')
-    plt.ylabel('loss')
-    plt.savefig(f'./log_loss_{num_circuit}.png')
-    plt.clf()
-    plt.close('all')
+    
 
 def main():
     final_results = dict()
 
-    epsilon = 1.0
-    gamma = 0.99
-    alpha = 1.5e-2
-    epsilon_decay_1 = 1e-5
-    min_epsilon_1 = 0.3
-    update_freq_1 = 5
-    digitize_1 = False
-
-    epsilon2 = 1.0
-    gamma2 = 0.99
-    alpha2 = 2.5e-2
-    epsilon_decay_2 = 1e-5
-    min_epsilon_2 = 0.3
-    update_freq_2 = 1
-    digitize_2 = False
-
-    epsilon3 = 1.0
-    gamma3 = 0.99
-    alpha3 = 1.5e-2
-    epsilon_decay_3 = 1e-5
-    min_epsilon_3 = 0.3
-    update_freq_3 = 1
-    digitize_3 = False
-
     #initializing players - it is possible to play up to 4 players together
     players = [
         bots.FunctionApproximationCar(
-            "P1", 
-            epsilon, 
-            gamma, 
-            alpha, 
-            epsilon_decay_1, 
-            min_epsilon_1, 
-            update_freq_1,
-            digitize_1
+            name="P2", 
+            alpha=alpha_1,
+            gamma=gamma_1,
+            epsilon=epsilon_1,
+            epsilon_decay=epsilon_decay_1,
+            min_epsilon=min_epsilon_1,
         ),
-        bots.FunctionApproximationCar(
-            "P2", 
-            epsilon2, 
-            gamma2, 
-            alpha2,  
-            epsilon_decay_2, 
-            min_epsilon_2, 
-            update_freq_2,
-            digitize_2
-        ),
-        bots.FunctionApproximationCar(
-            "P3", 
-            epsilon3, 
-            gamma3, 
-            alpha3, 
-            epsilon_decay_3, 
-            min_epsilon_3, 
-            update_freq_3,
-            digitize_3
-        ),
-        # bots.FunctionApproximationCar("P4", epsilon, gamma, alpha, TRACK.get_width(), TRACK.get_height()),
+        # bots.FunctionApproximationCar(
+        #     "P1", 
+        #     epsilon2,
+        #     gamma2,  
+        #     alpha2,  
+        #     epsilon_decay_2,  
+        #     min_epsilon_2,  
+        # ),
+        # bots.FunctionApproximationCar(
+        #     "P3", 
+        #     epsilon_1,
+        #     gamma_1,
+        #     alpha_1,
+        #     epsilon_decay_1,
+        #     min_epsilon_1,
+        # ),
+        # bots.FunctionApproximationCar(
+        #     "P4", 
+        #     epsilon_1,
+        #     gamma_1,
+        #     alpha_1,
+        #     epsilon_decay_1,
+        #     min_epsilon_1,
+        # ),
     ]
 
-    for p in players:
+    for i, p in enumerate(players):
+        # p.load_weights(i % 2)
         final_results[p.get_name()] = 0
 
-    perm = list(permutations(players))
-
     # Wczytywanie wag
-    for i, p in enumerate(players):
-        p.load_weights(i)
+    # for i, p in enumerate(players):
+    #     p.load_weights(i)
+    start_before = time()
+    last_loop = True
+    game_counter = 0
 
-    for k in range(2):
-        print('Training' if k == 0 else 'Testing')
-        for i, p in enumerate(perm):
-            print(f'Loop {i}')
 
-            start_time = time()
-            while time() - start_time < lasting:
-                game = Game(WIDTH, HEIGHT, FPS)
+    while time() - start_before < TRENING_TIME: 
+        # zmienilbym trening calkiem zeby czasowo sie trenowaly a nie na iteracje
+        p = list(players) # Create a copy if 'players' must remain in its original order
+        random.shuffle(p)
+        start_time = time()
+        while (not last_loop and time() - start_time < SINGLE_GAME_STOP_TIME) or \
+            (last_loop and time() - start_time < SHOWING_GAME_STOP_TIME):
+            game = Game(WIDTH, HEIGHT, FPS, last_loop)
 
-                # Add cars
-                for player in p:
-                    game.add_car(player)
+            # Add cars
+            for player in p:
+                game.add_car(player)
 
-                # Run the game
-                temp_rank = game.run(k==1)
+            # Run the game - show only the last game
+            print(f'Przed runem {last_loop}')
+            temp_rank = game.run(last_loop) 
 
-                points = len(players)
+            points = len(players)
 
-                for tr in temp_rank:
-                    for t in tr:
-                        final_results[t] += points
-                    points -= 1
+            for tr in temp_rank:
+                for t in tr:
+                    final_results[t] += points
+                points -= 1
 
-                if k == 0: # jak jest k == 0 to pokazuje na screenie nie ma potrzeby na wykresy
-                    for j, car in enumerate(players):
-                        car.record(j, i)
+            for j, car in enumerate(players):
+                car.record(j, game_counter, TRACK)
 
-    for i, p in enumerate(players):
-        p.save_model(i)
+        game_counter += 1
 
+        if last_loop:
+            break
+        if np.max([car.epsilon for car in players]) < EPSILON_STOP \
+            or time() - start_before > TRENING_TIME:
+            last_loop = True
+
+    for i, player in enumerate(players):
+        player.save_model(i)
     print(final_results)
 
 if __name__ == "__main__":

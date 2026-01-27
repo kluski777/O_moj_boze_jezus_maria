@@ -1,9 +1,10 @@
+from abstract_car import AbstractCar
+from collections import defaultdict
 import matplotlib.pyplot as plt
 import torch.nn as nn
 import numpy as np
-import torch
 import pygame
-from abstract_car import AbstractCar
+import torch
 
 class FunctionApproximationCar(AbstractCar, nn.Module):
     def __init__(
@@ -14,72 +15,50 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
             alpha: float, 
             epsilon_decay: float, 
             min_epsilon: float = 0.1, 
-            update_frequency: int = 10,
-            digitize = True
         ):
         AbstractCar.__init__(self, name)
         nn.Module.__init__(self)
         self.epsilon = epsilon
         self.epsilon_decay = epsilon_decay
         self.min_epsilon = min_epsilon
+        self.to_plot_dict = defaultdict(list)
 
         self.gamma = gamma
         self.alpha = alpha
 
-        self.pos_record = []
-        self.checkpoints_record = []
-        self.sin_record = []
-        self.loss_record = []
-        self.collision_record = []
-
         self.all_possible_actions = ['forward', 'backward', 'stop', 'left', 'right']
 
         self.network = nn.Sequential(
-            nn.LazyLinear(216),
-            nn.ReLU(), 
-            nn.Linear(216, 64),
-            nn.ReLU(), 
-            nn.Linear(64, 16),
-            nn.ReLU(), 
-            nn.Linear(16, 5),
+            nn.LazyLinear(16),
+            nn.ReLU(),
+            nn.LazyLinear(16),
+            nn.ReLU(),
+            nn.LazyLinear(5),
         )
-
-        self.loss = nn.SmoothL1Loss() # nn.MSELoss - zeby walczyc z szumem
+        
+        self.loss = nn.MSELoss() # ty no nie wiem czy MSE jest lepsze idk tbh
+        # self.loss = nn.SmoothL1Loss() # nn.MSELoss - zeby walczyc z szumem
         self.optim = torch.optim.SGD(self.parameters(), alpha)
-        self.update_frequency = update_frequency
-        self.update_counter = 0
-        self.digitize = digitize
-
-        self.sin_vals = np.linspace(-1, 1, num=9)
-        self.distance_vals = np.linspace(0, 250, num=30)
-        self.checkpoint_distance_vals = np.linspace(-50, 50, num=100)
 
     # wszystko musi byc lokalne
     def prepare_state(self, state) -> np.ndarray:
-        if self.digitize:
-            distances = np.digitize(state[0], self.distance_vals) / self.distance_vals.size
-            car_distances = np.digitize(state[1], self.distance_vals) / self.distance_vals.size
-            sin_angle = np.digitize([state[2]], self.sin_vals) / self.sin_vals.size
-
-            checkpoint_x_dist = np.digitize([self.x_diff], self.distance_vals) / self.checkpoint_distance_vals.size
-            checkpoint_y_dist = np.digitize([self.y_diff], self.distance_vals) / self.checkpoint_distance_vals.size
-        else:
-            distances = np.array(state[0]) / self.distance_vals[-1]
-            car_distances = np.array(state[1]) / self.distance_vals[-1]
-            sin_angle = np.array([state[2]]) / self.sin_vals[-1]
-            checkpoint_x_dist = np.array([self.x_diff]) / self.checkpoint_distance_vals[-1]
-            checkpoint_y_dist = np.array([self.y_diff]) / self.checkpoint_distance_vals[-1]
+        distances = state[0]
+        # car_distance = state[1]
+        sin_angle = state[2]
+        # velocity = state[3]
 
         flat_state = np.concatenate([
             distances,
-            car_distances,
-            sin_angle,
-            checkpoint_x_dist,
-            checkpoint_y_dist
+            # car_distance,
+            [sin_angle],
+            # [velocity]
         ])
-
-        if np.any(checkpoint_x_dist > 0.5) and np.any(checkpoint_y_dist > 0.5):
-            print(f'{checkpoint_y_dist=}, {checkpoint_x_dist=}')
+        
+        # indx = 0 jest na prawo, w praktyce potrzebuje indeksow 0, -1, -2, -3, -4 -> tylko 5 kierunkow
+        for i, distance in enumerate(distances):
+            self.to_plot_dict[f'{i}_distance'].append(distance)
+        self.to_plot_dict['sin'].append(sin_angle)
+        # self.to_plot_dict['vel'].append(velocity)
 
         return flat_state
 
@@ -115,7 +94,7 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
         return self.network(input)
     
     def update_weights(self, state: np.ndarray, action: str, reward: float, next_state: list):
-        if self.epsilon > 0.05:
+        if self.epsilon > self.min_epsilon:
             # jak bardzo epsilon spadnie maja problemy z odbijaniem sie od scian
             self.epsilon *= (1 - self.epsilon_decay)
         
@@ -125,78 +104,53 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
             next_q = self.estimate_q(next_state)
             max_next_q = torch.max(next_q)
             expected_reward = torch.tensor(reward, dtype=torch.float32) + self.gamma * max_next_q
+        self.update_counter += 1
 
         current_q = self.estimate_q(state)
         action_idx = self.all_possible_actions.index(action)
-
         previous_reward = current_q[action_idx]
 
-        loss = self.loss(expected_reward, previous_reward) / self.update_frequency
-        loss.backward()
-        
-        self.update_counter += 1
+        loss = self.loss(expected_reward, previous_reward)
 
-        if self.update_counter >= self.update_frequency:
-            self.update_counter = 0
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
-            self.optim.step()
-            self.loss_record.append( loss.item() )
-    
+        loss.backward()
+        self.to_plot_dict['loss'].append(loss.item())
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=0.1)
+        self.optim.step()
+        self.optim.zero_grad()  # Must clear here
+        
+        # if self.update_counter % self.target_update_freq == 0:
+            # self.target_network.load_state_dict(self.network.state_dict())
+
+
     def load_weights(self, i: int):
-        self.network.load_state_dict(torch.load(f"model_{i}_dobry.pth"))
+        self.network.load_state_dict( torch.load(f"model_{i}.pth", weights_only=True) )
 
     def save_model(self, i: int):
-        torch.save(self.network.state_dict(), f"model_{i}.pth")
+        torch.save( self.network.state_dict(), f"model_{i}.pth" )
 
-    def save(self, checkpoints_reward: int, sin_reward, collision_punishment):
-        self.checkpoints_record.append(checkpoints_reward)
-        self.sin_record.append(sin_reward)
-        self.pos_record.append(np.array([self.x, self.y]))
-        self.collision_record.append(collision_punishment)
+    def record(self, car: int, game: int, TRACK):
+        # Plot all metrics except positions
+        for key, vals in self.to_plot_dict.items():
+            if key in ('x', 'y'):
+                continue
+            plt.figure()
+            plt.title(f'{key} for {car=}, {game=}')
+            plt.plot(vals, 'o', markersize=1)
+            plt.savefig(f'./last_{key}_{game}_{car}.png')
+            plt.close()
+            if key != 'loss':
+                self.to_plot_dict[key] = []
+        
+        WIDTH, HEIGHT = TRACK.get_width(), TRACK.get_height()
 
-    def record(self, i: int, j: int):
-        alpha = self.alpha
-        gamma = self.gamma
-
-        plt.title(rf'Reward stats for {i=} alpha={alpha}, $\epsilon_0$={self.epsilon}' + f'\ngamma={gamma}, checkpoints covered = {self.checkpoint_index}')
-        plt.plot(self.checkpoints_record,   'o', markersize=0.25, label='Checkpoints covered')
-        plt.plot(self.sin_record,           'o', markersize=0.25, label='Sin')
-        plt.plot(self.collision_record,     'o', markersize=0.25, label='Collision')
-        plt.legend()
-        plt.xlabel('Epoch')
-        plt.ylabel('Reward value')
-        plt.savefig(f'./linear_{self.checkpoint_index}_{i}_epoch{j}.png')
-        plt.close('all')
-        plt.clf()
-
-        checkpoints_record = np.array(self.checkpoint_distance)
-        sin_record = np.array(self.sin_record)
-        collision_record = np.array(self.collision_record)
-
-        plt.title(rf'Reward stats for {i=} alpha={alpha}, $\epsilon_0$={self.epsilon}' + f'\ngamma={gamma}, checkpoints covered = {self.checkpoint_index}')
-        plt.plot(np.log10(np.abs(checkpoints_record)+1e-8),    'o', markersize=0.25, label='Checkpoints covered')
-        plt.plot(np.log10(np.abs(sin_record)+1e-8),            'o', markersize=0.25, label='Sin')
-        plt.plot(np.log10(np.abs(collision_record)+1e-8),      'o', markersize=0.25, label='Collision')
-        plt.legend()
-        plt.xlabel('Epoch')
-        plt.ylabel('Reward value')
-        plt.savefig(f'./log_{self.checkpoint_index}_{i}_epoch{j}.png')
-        plt.close('all')
-        plt.clf()
-
-        pos_record = np.array(self.pos_record)
-
-        plt.title(f'Position history for {i=} car')
-        plt.plot(pos_record[:, 0], -pos_record[:, 1])
-        plt.xlabel('x')
-        plt.ylabel('y')
-        plt.axis('off')
-        plt.savefig(f'./position_reocord{i}_epoch{j}.png')
-        plt.close('all')
-        plt.clf()
-
-        self.checkpoints_record = []
-        self.sin_record = []
-        self.distance_record = []
-        self.collision_record = []
-        self.pos_record = []
+        # Plot trajectory if position data exists
+        if 'x' in self.to_plot_dict and 'y' in self.to_plot_dict:
+            plt.figure()
+            plt.scatter(self.to_plot_dict['x'], -np.array(self.to_plot_dict['y']), s=0.2)
+            plt.axis('off')
+            plt.xlim([0, WIDTH])
+            plt.ylim([-HEIGHT, 0])
+            plt.savefig(f'./last_positions_{game}_{car}.png')
+            plt.close()
+            self.to_plot_dict['x'] = []
+            self.to_plot_dict['y'] = []
