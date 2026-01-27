@@ -160,7 +160,7 @@ class Game:
             distances[front_indices],
             # car_distances[front_indices],
             sin_diff,
-            # car.vel / car.max_vel
+            car.vel / car.max_vel
         ]
 
     def move_cars(self, show):
@@ -179,7 +179,7 @@ class Game:
             
             cos_angle = np.cos(np.radians(car.angle - car.angle_to_checkpoint))
             
-            distances, sin = state
+            distances, sin, _ = state
             left, right = distances[0], distances[-1]
 
             #! idealna nagroda to nagroda ktora jest ciagla.

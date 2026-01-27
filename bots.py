@@ -9,84 +9,97 @@ from constants import *
 
 def action_rewards(state: list, action: str, cos: float, car, show: bool) -> float:
     reward = 0.0
-    vel = car.vel * cos
+    vel = 2 * car.vel * (cos - 0.5)
 
-    distances, sin = state
+    distances, sin, _ = state
     right, right_front, front, left_front, left = distances
 
+    # trzeba dodac not action == KONIECZNIE
+
     # nie naprawilem tego bledu krecenia sie
-    if action == 'left':
-        if left_front > right_front + 0.05:  # wiecej miejsca z lewej do przodu
-            reward += 2.0
-        else:
-            reward -= 2.0
-        if left > right + 0.05:              # wiecej miejsca z lewej
-            reward += 1.0
-        else:
-            reward -= 1.0
+    if action == 'left': #! szczegolnie w lewo
+        if left_front > right_front:  # wiecej miejsca z lewej do przodu
+            reward += GOOD_SLIGHT_TURN
+        elif right_front > left_front + TOLERATION:
+            # print(f'left wpierdol: {left_front=}, {right_front=}')
+            reward -= GOOD_SLIGHT_TURN * 1.5
+        if left > right:              # wiecej miejsca z lewej
+            reward += GOOD_SHARP_TURN
+        elif right > left + TOLERATION:
+            # print(f'right: {left_front=}, {right_front=}')
+            reward -= GOOD_SHARP_TURN * 1.5
         
-        if front > right:                   # Moglby jechac prosto
-            reward -= 1.0
-        if front > right_front:             # Moglby jechac prosto
-            reward -= 1.0
+        if front > left:                   # Moglby jechac prosto
+            reward -= GOOD_SHARP_TURN / 3
+        if front > left_front:             # Moglby jechac prosto
+            reward -= GOOD_SLIGHT_TURN / 3
         
-        if left < 0.15:
-            reward += 1.0
-        elif left > 0.3:
-            reward -= 2.5
+        if right_front < 0.15:
+            reward += CLOSE_TURN
+        if right < 0.15:
+            reward += CLOSE_TURN
+        elif left < right - PROXIMITY:
+            # print(f'right: {left=}, {right=}')
+            reward -= 3 * CLOSE_TURN
         
         if sin > 0.4:
-            reward -= 5.0
-        elif sin < 0.0:
-            reward += 0.5
+            reward -= 50.0
+        elif sin < -0.4:
+            reward += GOOD_SHARP_TURN * 5
 
     if action == 'right':
-        if right_front > left_front + 0.05:  # Po prawej wiecej miejsca jest
-            reward += 2.0
-        else:
-            reward -= 2.0
-        if right > left + 0.05:              # Po prawej wiecej miejsca
-            reward += 1.0
-        else:
-            reward -= 1.0
+        if right_front > left_front:  # Po prawej wiecej miejsca jest
+            reward += GOOD_SLIGHT_TURN
+        elif left_front + 0.3 > right_front:
+            # print(f'right: {left_front=}, {right_front=}')
+            reward -= GOOD_SLIGHT_TURN * 2
+        if right > left:              # Po prawej wiecej miejsca
+            reward += GOOD_SHARP_TURN
+        elif left > right + 0.3:
+            reward -= GOOD_SHARP_TURN * 2
 
         if front > right:
-            reward -= 1.0
+            reward -= GOOD_SHARP_TURN / 3
         if front > right_front:
-            reward -= 1.0
+            reward -= GOOD_SLIGHT_TURN / 3
         
-        if right < 0.15:
-            reward += 1.0
-        elif right > 0.3:
-            reward -= 2.5
+        if left_front < 0.15:
+            reward += CLOSE_TURN
+        if left < 0.15:
+            reward += CLOSE_TURN
+        elif right < left - PROXIMITY:
+            # print(f'right: {left=}, {right=}')
+            reward -= 3 * CLOSE_TURN
 
         if sin < -0.4:
-            reward -= 5.0
-        elif sin > 0.0:
-            reward += 0.5
+            reward -= 50.0
+        elif sin > 0.4:
+            reward += GOOD_SHARP_TURN * 5
     
-    if action == 'forward': # wydaje mi sie ze nie bedzie jezdzic do przodu
-        if abs(sin) > 0.3:
-            reward -= 2.5                   # COFA SIE
-        if left_front > front:
-            reward -= 0.2
-        if right_front > front:
-            reward -= 0.2
-        if left > front:
-            reward -= 2.5                   # stoi lub jedzie bokiem do toru
-        if right > front:
-            reward -= 2.5                   # stoi lub jedzie bokiem do toru
-        if front > 0.55:
-            reward += 2.0                   # jedz adam jedz
+    if action == 'forward':
+        if abs(sin) > 0.7: # odchylony o wiecej niz 60 stopni 
+            reward -= 420                   # COFA SIE
+        
+        if left_front > front + 0.1 or right_front > front + 0.1:
+            reward -= TURN_INSTEAD_OF_FORWARD
+        else:
+            reward += TURN_INSTEAD_OF_FORWARD
+
+        if left > front + 0.1:
+            reward -= TURN_INSTEAD_OF_FORWARD * 2                   # stoi lub jedzie bokiem do toru
+        if right > front + 0.1:
+            reward -= TURN_INSTEAD_OF_FORWARD * 2                   # stoi lub jedzie bokiem do toru
+        if front < 0.2:
+            reward -= car.vel * 2
         reward += vel
 
     if action == 'stop':
         if front + 0.2 > left or front + 0.2 > right:
             reward += 0.5
-        if vel < 1.0:
+        if vel < 0.5:
             reward -= 10.0                  # stoi i sie gapi
-        if vel > 3.0:
-            reward += 0.75
+        if car.vel > 1:
+            reward += 3.0
 
     if action == 'backward':
         if abs(sin) < 0.4:
@@ -97,7 +110,7 @@ def action_rewards(state: list, action: str, cos: float, car, show: bool) -> flo
             reward += 0.25
 
     if show:
-        print(f'{action:10}, {reward:10.2f}')
+        print(f'{action:10}, {reward:10.2f}, {car.vel:10.2f}')
 
     return reward
 
@@ -140,13 +153,13 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
         distances = state[0]
         # car_distance = state[1]
         sin_angle = state[1]
-        # velocity = state[3]
+        velocity = state[2]
 
         flat_state = np.concatenate([
             distances,
             # car_distance,
             [sin_angle],
-            # [velocity]
+            [velocity]
         ])
         
         return flat_state
@@ -205,7 +218,6 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=0.1)
         self.optim.step()
         self.optim.zero_grad()  # Must clear here
-        
 
 
     def load_weights(self, i: int):
