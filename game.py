@@ -123,7 +123,6 @@ class Game:
                 if i != j and car1.collide_car(car2):
                     car1.bounce()
                     car2.bounce()
-                    # print(f"Collision between Car {i+1} and Car {j+1}!")
 
     def check_finish_line(self):
         finished = []
@@ -142,7 +141,7 @@ class Game:
     def get_state(self, car) -> list:
         _, distances = car.get_rays_and_distances(TRACK_BORDER_MASK)
         car_distances = car.get_distances_to_cars(self.cars)
-        # sin generalnie musi byc w range'u od -1 do 1 i dla tego kodziku jest
+        # kat od -pi do pi musi byc inaczej mi nie pasuje.
         angle_diff = (car.angle - car.angle_to_checkpoint + 180) % 360 - 180
         sin_diff = np.sin(np.radians(angle_diff / 2))
 
@@ -158,14 +157,13 @@ class Game:
         # MINIMALIZM TUTAJ JAK NAJMNIEJ TEGO DAWAJ
         return [
             distances[front_indices],
-            # car_distances[front_indices],
+            car_distances[front_indices], # jeszcze nie
             sin_diff,
-            car.vel / car.max_vel
+            car.vel / car.max_vel,
         ]
 
     def move_cars(self, show):
         """Handle car movements."""
-        # wszystko chce zrobic dyskretnym na DQLearning
 
         for car in self.cars:
             car.update_progress(CHECKPOINTS)
@@ -173,32 +171,35 @@ class Game:
         for i, car in enumerate(self.cars):
             state = self.get_state(car)
             
+            # best_indx = np.argmax([approximation.action_rewards(state, action, cos, car, False) / 420 for action in car.all_possible_actions])
+            # best_action = car.all_possible_actions[best_indx]
             action = car.choose_action(state)
             car.perform_action(action)
             car.update_progress(CHECKPOINTS)
+
+            cos = np.cos(np.radians(car.angle - car.angle_to_checkpoint))
             
-            cos_angle = np.cos(np.radians(car.angle - car.angle_to_checkpoint))
-            
-            distances, sin, _ = state
-            left, right = distances[0], distances[-1]
-
-            #! idealna nagroda to nagroda ktora jest ciagla.
-            # nagroda za jazde naprzod w kierunku checkpointa - powinno niezle dzialac
-            velocity_reward = cos_angle * car.vel
-
-            diff_reward = abs(left - right)
-
-            sin_punish = 0.0
-            if abs(state[1]) > 0.5: # za odwrocenie wzledem toru jazdy
-                sin_punish = abs(state[1]) - 0.5
-
-            action_reward = velocity_reward + diff_reward + sin_punish + bots.action_rewards(state, action, cos_angle, car, show)
-
-            reward = action_reward
-            # print(f'\r{velocity_reward=:20.2f}, {sin_punish=:15.2f}, {action_reward=}. {car.epsilon=:20.5f}', flush=True, end='')
-
             next_state = self.get_state(car)
+
+            # to jest w pretrainingu - potem tego next_state'a dodac trzeba
+            reward = approximation.action_rewards(state, action, cos, car, False) / 420.0
+            # reward = approximation.post_trening(state, next_state, cos)
+
+            # do liczenia nagrody OBV uzywaj nastepnego stanu to powinno byc oczywiste...
+
+            # values = np.array([bots.action_rewards(state, action, cos, car, False) for action in car.all_possible_actions])
+            # action_list = np.array(car.all_possible_actions)
+            # sorted_indx = np.argsort(values)[::-1]
+            # best_actions = action_list[sorted_indx]
+
+            # if i == 2:
+            #     print(f'\r{best_actions=}, {np.round(values[sorted_indx], decimals=1)}', flush=True, end='')
+            #     # print(f'\n{car.previous_action=}')
+            #     print(f'\n{state=}')
+
+            car.previous_action = action
             car.update_weights(state, action, reward, next_state)
+
 
     def run(self, show=False) -> list:
         """Main game loop."""
@@ -209,17 +210,12 @@ class Game:
         loop = 0
 
         while self.running and len(self.cars) != 0 and time_passed < SINGLE_GAME_STOP_TIME:
-            # print(f'\r{time_passed / SINGLE_GAME_STOP_TIME * 100 :.2f}%, Epsilon={self.cars[0].epsilon}', flush=True, end='')
+            print(f'\r{time_passed / SINGLE_GAME_STOP_TIME * 100 :.2f}%, Epsilon={self.cars[0].epsilon}', flush=True, end='')
             # self.clock.tick(self.fps)
             loop += 1
 
             if show:
                 for i, car in enumerate(self.cars):
-                    draw_checkpoints(
-                        self.win, 
-                        CHECKPOINTS[car.checkpoint_index:car.checkpoint_index+1],
-                        color=(255, 0, 0) if i == 0 else (0, 255, 0)
-                    )
                     pygame.display.update()
 
             for event in pygame.event.get():
@@ -237,8 +233,10 @@ class Game:
                 self.draw()
 
         pygame.quit()
-        print("Game over!")
+        # print("Game over!")
         print(who_finished_first)
+        for i, car in enumerate(self.cars):
+            print(f'{i}. {car.epsilon}')
         return who_finished_first
     
 
@@ -248,7 +246,7 @@ def main():
     #initializing players - it is possible to play up to 4 players together
     players = [
         bots.FunctionApproximationCar(
-            name="P2", 
+            name="P1", 
             alpha=alpha_1,
             gamma=gamma_1,
             epsilon=epsilon_1,
@@ -256,12 +254,12 @@ def main():
             min_epsilon=min_epsilon_1,
         ),
         # bots.FunctionApproximationCar(
-        #     "P1", 
+        #     "P2",
         #     epsilon2,
-        #     gamma2,  
-        #     alpha2,  
-        #     epsilon_decay_2,  
-        #     min_epsilon_2,  
+        #     gamma2,
+        #     alpha2,
+        #     epsilon_decay_2,
+        #     min_epsilon_2,
         # ),
         # bots.FunctionApproximationCar(
         #     "P3", 
@@ -282,20 +280,15 @@ def main():
     ]
 
     for i, p in enumerate(players):
-        p.load_weights(i % 2)
+        # p.load_weights(f'best_{i}.pth')
         final_results[p.get_name()] = 0
 
-    # Wczytywanie wag
-    # for i, p in enumerate(players):
-    #     p.load_weights(i)
     start_before = time()
     last_loop = False
     game_counter = 0
 
-
     while time() - start_before < TRENING_TIME: 
-        # zmienilbym trening calkiem zeby czasowo sie trenowaly a nie na iteracje
-        p = list(players) # Create a copy if 'players' must remain in its original order
+        p = list(players)
         random.shuffle(p)
         start_time = time()
         while (not last_loop and time() - start_time < SINGLE_GAME_STOP_TIME) or \
@@ -307,7 +300,6 @@ def main():
                 game.add_car(player)
 
             # Run the game - show only the last game
-            print(f'Przed runem {last_loop}')
             temp_rank = game.run(last_loop) 
 
             points = len(players)
@@ -329,7 +321,7 @@ def main():
             last_loop = True
 
     for i, player in enumerate(players):
-        player.save_model(i)
+        player.save_model(f'best_{i}.pth')
     print(final_results)
 
 if __name__ == "__main__":
