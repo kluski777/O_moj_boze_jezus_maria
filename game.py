@@ -171,7 +171,7 @@ class Game:
         for i, car in enumerate(self.cars):
             state = self.get_state(car)
             
-            # best_indx = np.argmax([approximation.action_rewards(state, action, cos, car, False) / 420 for action in car.all_possible_actions])
+            # best_indx = np.argmax([bots.action_rewards(state, action, cos, car, False) / 420 for action in car.all_possible_actions])
             # best_action = car.all_possible_actions[best_indx]
             action = car.choose_action(state)
             car.perform_action(action)
@@ -182,11 +182,9 @@ class Game:
             next_state = self.get_state(car)
 
             # to jest w pretrainingu - potem tego next_state'a dodac trzeba
-            reward = approximation.action_rewards(state, action, cos, car, False) / 420.0
-            # reward = approximation.post_trening(state, next_state, cos)
-
-            # do liczenia nagrody OBV uzywaj nastepnego stanu to powinno byc oczywiste...
-
+            reward = bots.action_rewards(state, action, cos, car, False) / 25
+            # reward = approximation.post_trening(state, next_state, cos) / 25
+            print(f'{reward=}')
             # values = np.array([bots.action_rewards(state, action, cos, car, False) for action in car.all_possible_actions])
             # action_list = np.array(car.all_possible_actions)
             # sorted_indx = np.argsort(values)[::-1]
@@ -247,20 +245,20 @@ def main():
     players = [
         bots.FunctionApproximationCar(
             name="P1", 
-            alpha=alpha_1,
+            alpha=0, #alpha_1,
             gamma=gamma_1,
-            epsilon=epsilon_1,
+            epsilon=0.2, #epsilon_1,
             epsilon_decay=epsilon_decay_1,
             min_epsilon=min_epsilon_1,
         ),
-        # bots.FunctionApproximationCar(
-        #     "P2",
-        #     epsilon2,
-        #     gamma2,
-        #     alpha2,
-        #     epsilon_decay_2,
-        #     min_epsilon_2,
-        # ),
+        bots.FunctionApproximationCar(
+            name="P2",
+            epsilon=0.2, #epsilon2,
+            gamma=gamma2,
+            alpha=0, #alpha2,
+            epsilon_decay=epsilon_decay_2,
+            min_epsilon=min_epsilon_2,
+        ),
         # bots.FunctionApproximationCar(
         #     "P3", 
         #     epsilon_1,
@@ -280,11 +278,11 @@ def main():
     ]
 
     for i, p in enumerate(players):
-        # p.load_weights(f'best_{i}.pth')
+        p.load_weights('post_training_0.pth')
         final_results[p.get_name()] = 0
 
     start_before = time()
-    last_loop = False
+    last_loop = True
     game_counter = 0
 
     while time() - start_before < TRENING_TIME: 
@@ -321,7 +319,7 @@ def main():
             last_loop = True
 
     for i, player in enumerate(players):
-        player.save_model(f'best_{i}.pth')
+        player.save_model(f'post_training_{i}.pth')
     print(final_results)
 
 if __name__ == "__main__":

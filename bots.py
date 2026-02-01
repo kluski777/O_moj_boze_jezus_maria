@@ -8,7 +8,7 @@ import torch
 from constants import *
 
 #! Napisz to kupsko od nowa tak zeby dzialalo. Daj sin jako glowna rzecz ktora prowadzi autko
-#! Jezdzic beda 
+#! Chyba jako tako dziala
 def action_rewards(state: list, action: str, cos: float, car, show: bool) -> float:
     reward = 0.0
 
@@ -16,39 +16,39 @@ def action_rewards(state: list, action: str, cos: float, car, show: bool) -> flo
     right, right_front, front, left_front, left = distances
     right_car, right_front_car, front_car, left_front_car, left_car = car_distances
 
+    if action == 'forward': # dla predkosci wiekszej niz 5 bedzie po scianachb jezdzic
+        if car.vel < 5.0 and (front > 0.15 or left_front_car > 0.25 or right_front_car > 0.25 or front_car > 0.15 or right_front_car > 0.15 or left_front_car > 0.15):
+            # reward += 5 / (car.vel + 1e-2)
+            reward += (25.0 - abs(car.vel) * 5)
+            reward *= (cos - 0.2)
+        if front_car < 0.15:
+            reward = -1.0
+
     if action == 'left':
-        if right_front < 0.15 or right < 0.15:
+        if right_front < 0.15 or right < 0.15 or right_car < 0.15 or right_front_car < 0.15:
             reward += 10.0
         else:
-            reward = -sin * 60 # 5 dla sin = 1/2
-        # if car.previous_action == 'right' or abs(car.vel) < 0.7:
-        #     reward = -10.0
-    
+            reward = -sin * 20 # 5 dla sin = 1/2
+    if action != 'left' and right_front < 0.15 and right < 0.15: 
+        reward -= 20.0
 
     if action == 'right':
-        if left < 0.15 or left_front < 0.15:
+        if left < 0.15 or left_front < 0.15 or left_car < 0.15 or left_front_car < 0.15:
             reward += 10.0
         else:
-            reward = sin * 60
-        # if car.previous_action == 'left' or abs(car.vel) < 0.7:
-        #     reward = -10.0
-    
-    if action == 'forward': # odleglosci od innych autek sa zepsute
-        if car.vel < 4.0 and (front > 0.15 or left_front_car > 0.25 or right_front_car > 0.25 or front_car > 0.15 or right_front_car > 0.15 or left_front_car > 0.15):
-            reward += 5 / (car.vel + 1e-3)
-        reward = min(60.0, reward)
-        # if car.previous_action == 'backward':
-        #     reward = -10.0
+            reward = sin * 20
+    if action != 'right' and left < 0.15 or left_front < 0.15: 
+        reward -= 20.0
 
     if action == 'stop':
         if car.vel > 3.0 and (front < 0.6 or front_car < 0.3 or left_front_car < 0.3 or right_front_car < 0.3):
             reward = 4.0
         elif abs(car.vel) < 1.0:
-            reward = -10.0
+            reward = -25.0
 
     if action == 'backward':
         if front > 0.15:
-            reward -= 10.0
+            reward -= 25.0
         elif np.all( car_distances < 1e-3 ): # tu cos dziwnego sie odwala chyba sie 2 zderzyly i ma po 0 odleglosci
             reward = 4.0 
         else: 
@@ -174,7 +174,8 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
     def load_weights(self, filename: str):
         checkpoint = torch.load(filename)
         self.network.load_state_dict(checkpoint['network_state_dict'])
-        self.epsilon = checkpoint['epsilon']
+        print(f'Wagi wczytane z {filename}')
+        # self.epsilon = checkpoint['epsilon']
     
     def record(self, car: int, game: int, TRACK):
         # Plot all metrics except positions

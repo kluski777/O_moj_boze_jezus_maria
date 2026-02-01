@@ -6,56 +6,43 @@ from abstract_car import AbstractCar
 from constants import *
 
 
-#! Przetestowac czy to w ogole dziala i ma sens
-def post_trening(old_state: np.ndarray, new_state: np.ndarray, cos_aft: float) -> float:
+def post_trening(old_state: list, new_state: list, cos_aft: float) -> float:
     old_car_dists = np.array(old_state[1])
     new_car_dists = np.array(new_state[1])
-    old_sin = old_state[-2]
-    new_sin = new_state[-2]
-
-    # Dodatnie = oddalają się. Ujemne = zbliżają się.
+    
     diff_dists = new_car_dists - old_car_dists
     
-    # Znajdź najbliższego sąsiada teraz
     min_dist = np.min(new_car_dists)
     closest_idx = np.argmin(new_car_dists)
     dist_change = diff_dists[closest_idx]
 
     reward = 0.0
     
-    #! Tlum - jak nie w tlumie to niech jedzie jak chce - byle do mety
-    if min_dist < 0.4:
-        if dist_change < -0.005: # zblizyl sie do innego auta -> UWAGA: musi to byc gorsze niz oddalanie sie 
-            reward -= 20.0 
-        elif dist_change > 0.005: # oddalil sie -> superancko
-            reward += 10.0
-        else:
-            reward += 0.0 
-    
-    if min_dist < 0.05:     # zderzka - musi dostac po twarzy za to co uczynil
-        reward -= 50.0
+    if min_dist < 0.4: # Działa tylko w tłoku
+        reward += dist_change * 1000.0 
+        
+        if min_dist < 0.2:
+            reward += dist_change * 2000.0
 
-    old_dists = np.array(old_state[0])
-    new_dists = np.array(old_state[0])
-    arg_min = np.argmin(new_dists)
-    if np.any(new_dists[arg_min] < 0.2) and old_dists[arg_min] > new_dists[arg_min]: # prawie zderzka i w dodatku jeszcze sie przybliza
-        reward -= 15.0
-
-    v = new_state[-1]
-    # chcemy zeby jechal do przodu
-    if cos_aft * v > 0.2:
-        reward += - (v - 3.0) * (v - 0.2) # niech max bedzie dla 3-4
-    else:
+    if min_dist < 0.05:
         reward -= 20.0
 
-    if np.sign(old_sin - new_sin) == np.sign(old_sin):
-        reward += abs(old_sin - new_sin) * 4.0 # w dobra strone skreca
-    elif abs(old_sin - new_sin) > 2e-2:
-        reward -= abs(old_sin - new_sin) * 4.0 # w zla strone skreca
+    v = new_state[-1]
+    if cos_aft > 0.6 and v < 4.0 and v > 0.2: # Tylko jak przodem
+        reward += (4.0 - v)
+    elif cos_aft < 0.6:
+        reward -= abs(4 * v)
+    elif abs(v) < 0.1:
+        reward -= 5.0 # nic nie robi
 
-    if np.all( np.abs(old_dists - new_dists) < 7e-3 ):
-        reward -= 10.0 # nic nie robi.
-
+    reward += 2 * (abs(old_car_dists[0] - old_car_dists[-1]) - abs(new_car_dists[0] - old_car_dists[-1]))
+    
+    old_sin = old_state[-2]
+    new_sin = new_state[-2]
+    
+    if abs(new_sin) < abs(old_sin):
+        reward += 5.0
+    
     return reward
 
 

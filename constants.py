@@ -1,28 +1,28 @@
-TRENING_TIME = 20 * 60
+TRENING_TIME = 4 * 60
 EPSILON_STOP = 0.1
-SINGLE_GAME_STOP_TIME = 12
+SINGLE_GAME_STOP_TIME = 30
 SHOWING_GAME_STOP_TIME = 240
 COLISION_PUNISHMENT = 4.0
 EXISTANCE_PUNISHMENT = 1.0
 
 GOOD_SLIGHT_TURN = 6.0
 GOOD_SHARP_TURN = 4.0
-CLOSE_TURN = 4.0
+CLOSE_TURN = 10.0 
 TURN_INSTEAD_OF_FORWARD = 2.0
 TOLERATION = 0.3
 PROXIMITY = 0.2
 
-epsilon_1 = 1.1
+epsilon_1 = 1.05
 gamma_1 = 0.99
-alpha_1 = 5e-2
-epsilon_decay_1 = 1e-6
-min_epsilon_1 = 0.1
+alpha_1 = 3e-2
+epsilon_decay_1 = 7.5e-6
+min_epsilon_1 = 0.2
 
 epsilon2 = 1.0
 gamma2 = 0.99
 alpha2 = 2.5e-2
 epsilon_decay_2 = 1e-5
-min_epsilon_2 = 0.0
+min_epsilon_2 = 0.2
 
 epsilon3 = 1.0
 gamma3 = 0.99
