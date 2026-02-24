@@ -8,7 +8,7 @@ import torch.nn as nn
 import copy
 
 import math
-from abstract_car import AbstractCar
+from abstract_car import MarcinAbstractCar
 from collections import defaultdict
 import matplotlib.pyplot as plt
 import torch.nn as nn
@@ -24,7 +24,7 @@ from constants import *
 
 
 
-class FunctionApproximationCar(AbstractCar, nn.Module):
+class FunctionApproximationCar(MarcinAbstractCar, nn.Module):
     network = None
     optim = None
     target_network = None
@@ -51,6 +51,7 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
         self.eval_flag = eval_flag
         self.checkpoints = None
         self.last_non_zero_car_dist = None
+        self.track_border_mask = None
 
         self.gamma = gamma
         self.alpha = alpha
@@ -59,9 +60,11 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
 
         if FunctionApproximationCar.network is None:
             FunctionApproximationCar.network = nn.Sequential(
-                nn.Linear(17, 512), nn.LayerNorm(512), nn.Mish(),
-                nn.Linear(512, 512), nn.LayerNorm(512), nn.Mish(),
-                nn.Linear(512, len(self.all_possible_actions))
+                nn.Linear(17, 476), nn.LayerNorm(476), nn.Mish(),
+                nn.Linear(476, 1024), nn.LayerNorm(1024), nn.Mish(),
+                nn.Linear(1024, 512), nn.LayerNorm(512), nn.Mish(),
+                nn.Linear(512, 128), nn.LayerNorm(128), nn.Mish(), 
+                nn.Linear(128, len(self.all_possible_actions))
             )
             FunctionApproximationCar.target_network = copy.deepcopy(
                 FunctionApproximationCar.network
@@ -75,6 +78,29 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
         self.target_network = FunctionApproximationCar.target_network
         self.optim = FunctionApproximationCar.optim
         self.loss = nn.SmoothL1Loss()
+
+    def get_state(self, cars):
+        _, distances = self.get_rays_and_distances(self.track_border_mask)
+        car_distances = self.get_distances_to_cars(cars)
+        angle_diff = (self.angle - self.angle_to_checkpoint + 180) % 360 - 180
+        sin_diff = np.sin(np.radians(angle_diff / 2))
+
+        distances = np.array(distances) / 200
+        car_distances = np.array(car_distances) / 200
+
+        self.to_plot_dict['position'][-1].append(np.array([self.x, self.y]))
+
+        front_indices = [0, -1, -2, -3, -4, -6]
+
+        checkpoint_distance = np.hypot(self.x_diff, self.y_diff) / 100
+
+        return [
+            distances[front_indices],
+            car_distances,
+            sin_diff,
+            self.vel / self.max_vel,
+            checkpoint_distance
+        ]
 
     def prepare_state(self, state) -> np.ndarray:
         distances = state[0]
@@ -399,18 +425,29 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
             fig.savefig(f"plots/{key}_{player_num}.png", dpi=120, bbox_inches='tight')
             plt.close(fig)
 
-            for action in self.all_possible_actions:
-                reward_type = self.rewards_dict[action]
-                fig, ax = plt.subplots(figsize=(12, 6))
-                for key, vals in reward_type.items():
-                    means = {k: np.mean(v) for k, v in reward_type.items()}
-                    keys = list(means.keys())
-                    vals = list(means.values())
-                    colors = ['green' if v > 0 else 'red' for v in vals]
-                    fig, ax = plt.subplots(figsize=(10, max(3, len(keys) * 0.3)))
-                    ax.barh(keys, vals, color=colors)
-                
-                ax.axvline(0, color='black', linewidth=0.8)
-                ax.set_title(f'Mean reward contribution: {action}')
-                fig.savefig(f'./plots/bar_{action}_{player_num}.png', dpi=120, bbox_inches='tight')
-                plt.close(fig)
+        for action in self.all_possible_actions:
+            reward_type = self.rewards_dict[action]
+
+            # Rolling line plot
+            fig, ax = plt.subplots(figsize=(12, 6))
+            for key, vals in reward_type.items():
+                vals = np.array(vals)
+                window = max(1, len(vals) // 20)
+                roll = np.convolve(vals, np.ones(window)/window, mode='valid')
+                ax.plot(roll, label=key)
+            ax.set_title(f'Plot for {action}.')
+            ax.legend(fontsize=7, loc='center left', bbox_to_anchor=(1, 0.5))
+            fig.savefig(f'./plots/rewards_{action}_{player_num}.png', dpi=120, bbox_inches='tight')
+            plt.close(fig)
+
+            # Bar chart — outside the inner loop
+            means = {k: np.mean(v) for k, v in reward_type.items()}
+            keys = list(means.keys())
+            vals = list(means.values())
+            colors = ['green' if v > 0 else 'red' for v in vals]
+            fig, ax = plt.subplots(figsize=(10, max(3, len(keys) * 0.3)))
+            ax.barh(keys, vals, color=colors)
+            ax.axvline(0, color='black', linewidth=0.8)
+            ax.set_title(f'Mean reward contribution: {action}')
+            fig.savefig(f'./plots/bar_{action}_{player_num}.png', dpi=120, bbox_inches='tight')
+            plt.close(fig)

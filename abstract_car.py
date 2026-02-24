@@ -8,7 +8,7 @@ FONT = pygame.font.Font(None, 24)  # Use a default font with size 24
 max_vel = 8
 rotation_vel = 4
 
-class AbstractCar:
+class MarcinAbstractCar:
     def __init__(self, name):
         self.img = None
         self.max_vel = max_vel

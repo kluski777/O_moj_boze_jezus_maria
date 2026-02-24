@@ -4,7 +4,7 @@ from time import time
 from importlib import reload
 import pygame
 import numpy as np
-from abstract_car import AbstractCar
+from abstract_car import MarcinAbstractCar
 from utils import scale_image
 import random
 import approximation
@@ -82,7 +82,7 @@ class Game:
 
     def add_car(self, car):
         """Add a car to the game."""
-        if not isinstance(car, AbstractCar):
+        if not isinstance(car, MarcinAbstractCar):
             raise ValueError("Only instances of AbstractCar or its subclasses can be added.")
 
         if len(self.cars) == 0:
@@ -138,32 +138,6 @@ class Game:
 
         return finished
 
-    def get_state(self, car) -> list:
-        _, distances = car.get_rays_and_distances(TRACK_BORDER_MASK)
-        car_distances = car.get_distances_to_cars(self.cars)
-        # kat od -pi do pi musi byc inaczej mi nie pasuje.
-        angle_diff = (car.angle - car.angle_to_checkpoint + 180) % 360 - 180
-        sin_diff = np.sin(np.radians(angle_diff / 2))
-
-        # rzadko wychodzi poza 200
-        distances = np.array(distances) / 200
-        car_distances = np.array(car_distances) / 200
-
-        car.to_plot_dict['position'][-1].append(np.array([car.x, car.y]))
-
-        front_indices = [0, -1, -2, -3, -4, -6]
-
-        checkpoint_distance = np.hypot(car.x_diff, car.y_diff) / 100
-
-        # MINIMALIZM TUTAJ JAK NAJMNIEJ TEGO DAWAJ
-        return [
-            distances[front_indices],
-            car_distances,
-            sin_diff,
-            car.vel / car.max_vel,
-            checkpoint_distance
-        ]
-
     def move_cars(self, show):
         """Handle car movements."""
 
@@ -171,7 +145,7 @@ class Game:
             car.update_progress(CHECKPOINTS)
 
         for i, car in enumerate(self.cars):
-            state = self.get_state(car)
+            state = car.get_state(self.cars)
             prev_indx, _ = car.get_progress()
 
             action = car.choose_action(state)
@@ -180,7 +154,7 @@ class Game:
             cos = np.cos(np.radians(car.angle - car.angle_to_checkpoint))
 
             cur_indx, _ = car.get_progress()
-            next_state = self.get_state(car)
+            next_state = car.get_state(self.cars)
 
             # to jest w pretrainingu - potem tego next_state'a dodac trzeba
             reward = car.action_rewards(state, action, cos, car, False) / 1000
@@ -232,7 +206,7 @@ class Game:
 
 def main():
     final_results = dict()
-    last_loop = True
+    last_loop = False
 
     #initializing players - it is possible to play up to 4 players together
     players = [
@@ -273,8 +247,10 @@ def main():
     ]
 
     for i, p in enumerate(players):
+        p.track_border_mask = TRACK_BORDER_MASK
         p.checkpoints = CHECKPOINTS
-        # p.load_weights(f'checkpoints_500_{i}.pth')
+        # p.load_weights(f'checkpoint_high_{i%2}.pth')
+        p.load_weights(f'on_4_check_{i}.pth')
         final_results[p.get_name()] = 0
 
     start_before = time()
@@ -314,7 +290,7 @@ def main():
             last_loop = True
 
     for i, player in enumerate(players):
-        player.save_model(f'checkpoints_500_{i}.pth')
+        player.save_model(f'on_4_check_{i}_2.pth')
     print(final_results)
 
 if __name__ == "__main__":
