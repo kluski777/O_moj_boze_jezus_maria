@@ -46,7 +46,7 @@ track_path =  [(175, 119), (110, 70), (56, 133), (70, 481), (318, 731), (404, 68
 
 
 # Interpolate evenly spaced checkpoints
-def generate_checkpoints(track_path, num_checkpoints=100):
+def generate_checkpoints(track_path, num_checkpoints=500):
     checkpoints = []
     for i in range(len(track_path) - 1):
         x1, y1 = track_path[i]
@@ -57,7 +57,7 @@ def generate_checkpoints(track_path, num_checkpoints=100):
             checkpoints.append((int(x), int(y)))
     return checkpoints
 
-CHECKPOINTS = generate_checkpoints(track_path, num_checkpoints=250)
+CHECKPOINTS = generate_checkpoints(track_path, num_checkpoints=500)
 CHECKPOINT_DISTANCES = [np.hypot(CHECKPOINTS[0][1] - 180, CHECKPOINTS[0][0] - 200)] + [
     np.hypot(CHECKPOINTS[i][1] - CHECKPOINTS[i+1][1], CHECKPOINTS[i][0] - CHECKPOINTS[i+1][0]) 
     for i in range(len(CHECKPOINTS) - 1)
@@ -149,18 +149,19 @@ class Game:
         distances = np.array(distances) / 200
         car_distances = np.array(car_distances) / 200
 
-        car.to_plot_dict['x'].append(car.x)
-        car.to_plot_dict['y'].append(car.y)
+        car.to_plot_dict['position'][-1].append(np.array([car.x, car.y]))
 
         front_indices = [0, -1, -2, -3, -4, -6]
-        car_indices = [-2, -6]
+
+        checkpoint_distance = np.hypot(car.x_diff, car.y_diff) / 100
 
         # MINIMALIZM TUTAJ JAK NAJMNIEJ TEGO DAWAJ
         return [
             distances[front_indices],
-            car_distances[car_indices], # jeszcze nie
+            car_distances,
             sin_diff,
             car.vel / car.max_vel,
+            checkpoint_distance
         ]
 
     def move_cars(self, show):
@@ -171,25 +172,18 @@ class Game:
 
         for i, car in enumerate(self.cars):
             state = self.get_state(car)
-            
-            # best_indx = np.argmax([bots.action_rewards(state, action, cos, car, False) / 420 for action in car.all_possible_actions])
-            # best_action = car.all_possible_actions[best_indx]
+            prev_indx, _ = car.get_progress()
+
             action = car.choose_action(state)
             car.perform_action(action)
             car.update_progress(CHECKPOINTS)
-
             cos = np.cos(np.radians(car.angle - car.angle_to_checkpoint))
-            
+
+            cur_indx, _ = car.get_progress()
             next_state = self.get_state(car)
 
             # to jest w pretrainingu - potem tego next_state'a dodac trzeba
-            reward = bots.action_rewards(state, action, cos, car, False) / 400
-
-            # reward = approximation.post_trening(state, next_state, cos) / 25
-            # values = np.array([bots.action_rewards(state, action, cos, car, False) for action in car.all_possible_actions])
-            # action_list = np.array(car.all_possible_actions)
-            # sorted_indx = np.argsort(values)[::-1]
-            # best_actions = action_list[sorted_indx]
+            reward = car.action_rewards(state, action, cos, car, False) / 1000
 
             car.previous_action = action
             car.update_weights(state, action, reward, next_state)
@@ -200,6 +194,8 @@ class Game:
         who_finished_first = []
         start_time = time()
         time_passed = 0
+        for car in self.cars:
+            car.to_plot_dict['position'].append([])
 
         loop = 0
 
@@ -249,15 +245,15 @@ def main():
             min_epsilon=min_epsilon_1,
             eval_flag=last_loop
         ),
-        bots.FunctionApproximationCar(
-            name="P2",
-            epsilon=epsilon2,
-            gamma=gamma2,
-            alpha=alpha2,
-            epsilon_decay=epsilon_decay_2,
-            min_epsilon=min_epsilon_2,
-            eval_flag=last_loop
-        ),
+        # bots.FunctionApproximationCar(
+        #     name="P2",
+        #     epsilon=epsilon2,
+        #     gamma=gamma2,
+        #     alpha=alpha2,
+        #     epsilon_decay=epsilon_decay_2,
+        #     min_epsilon=min_epsilon_2,
+        #     eval_flag=last_loop
+        # ),
         # bots.FunctionApproximationCar(
         #     "P3", 
         #     epsilon_1,
@@ -277,7 +273,8 @@ def main():
     ]
 
     for i, p in enumerate(players):
-        p.load_weights(f'post_training_{i}.pth')
+        p.checkpoints = CHECKPOINTS
+        p.load_weights(f'checkpoints_500_{i}.pth')
         final_results[p.get_name()] = 0
 
     start_before = time()
@@ -306,7 +303,7 @@ def main():
                 points -= 1
 
             for j, car in enumerate(players):
-                car.record(j, game_counter, TRACK)
+                car.plot_records(j, game_counter, TRACK)
 
         game_counter += 1
 
@@ -317,7 +314,7 @@ def main():
             last_loop = True
 
     for i, player in enumerate(players):
-        player.save_model(f'model_{i}.pth')
+        player.save_model(f'checkpoints_500_{i}.pth')
     print(final_results)
 
 if __name__ == "__main__":
