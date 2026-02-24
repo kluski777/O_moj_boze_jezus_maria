@@ -1,4 +1,4 @@
-TRENING_TIME = 10 * 60
+TRENING_TIME = 30 * 60
 EPSILON_STOP = 0.1
 SINGLE_GAME_STOP_TIME = 10
 SHOWING_GAME_STOP_TIME = 240
@@ -21,7 +21,7 @@ min_epsilon_1 = -1
 epsilon2 = 1.0
 gamma2 = 0.5
 alpha2 = 1e-2
-epsilon_decay_2 = 4e-5
+epsilon_decay_2 = 5e-6
 min_epsilon_2 = -1
 
 epsilon3 = 1.0

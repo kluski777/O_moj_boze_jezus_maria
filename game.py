@@ -46,7 +46,7 @@ track_path =  [(175, 119), (110, 70), (56, 133), (70, 481), (318, 731), (404, 68
 
 
 # Interpolate evenly spaced checkpoints
-def generate_checkpoints(track_path, num_checkpoints=500):
+def generate_checkpoints(track_path, num_checkpoints=100):
     checkpoints = []
     for i in range(len(track_path) - 1):
         x1, y1 = track_path[i]
@@ -57,7 +57,7 @@ def generate_checkpoints(track_path, num_checkpoints=500):
             checkpoints.append((int(x), int(y)))
     return checkpoints
 
-CHECKPOINTS = generate_checkpoints(track_path, num_checkpoints=500)
+CHECKPOINTS = generate_checkpoints(track_path, num_checkpoints=100)
 CHECKPOINT_DISTANCES = [np.hypot(CHECKPOINTS[0][1] - 180, CHECKPOINTS[0][0] - 200)] + [
     np.hypot(CHECKPOINTS[i][1] - CHECKPOINTS[i+1][1], CHECKPOINTS[i][0] - CHECKPOINTS[i+1][0]) 
     for i in range(len(CHECKPOINTS) - 1)
@@ -245,15 +245,15 @@ def main():
             min_epsilon=min_epsilon_1,
             eval_flag=last_loop
         ),
-        # bots.FunctionApproximationCar(
-        #     name="P2",
-        #     epsilon=epsilon2,
-        #     gamma=gamma2,
-        #     alpha=alpha2,
-        #     epsilon_decay=epsilon_decay_2,
-        #     min_epsilon=min_epsilon_2,
-        #     eval_flag=last_loop
-        # ),
+        bots.FunctionApproximationCar(
+            name="P2",
+            epsilon=epsilon2,
+            gamma=gamma2,
+            alpha=alpha2,
+            epsilon_decay=epsilon_decay_2,
+            min_epsilon=min_epsilon_2,
+            eval_flag=last_loop
+        ),
         # bots.FunctionApproximationCar(
         #     "P3", 
         #     epsilon_1,
@@ -274,7 +274,7 @@ def main():
 
     for i, p in enumerate(players):
         p.checkpoints = CHECKPOINTS
-        p.load_weights(f'checkpoints_500_{i}.pth')
+        p.load_weights(f'checkpoints_500_0.pth')
         final_results[p.get_name()] = 0
 
     start_before = time()
