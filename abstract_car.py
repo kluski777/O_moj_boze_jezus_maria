@@ -42,7 +42,7 @@ class AbstractCar:
         distances = []
 
         for angle in angles:
-            radians = angle_rad + math.radians(angle)
+            radians = math.radians(angle)
             ray_dx = math.cos(radians)
             ray_dy = math.sin(radians)
 

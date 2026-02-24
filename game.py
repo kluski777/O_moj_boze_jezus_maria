@@ -232,7 +232,7 @@ class Game:
 
 def main():
     final_results = dict()
-    last_loop = False
+    last_loop = True
 
     #initializing players - it is possible to play up to 4 players together
     players = [
@@ -254,27 +254,27 @@ def main():
             min_epsilon=min_epsilon_2,
             eval_flag=last_loop
         ),
-        # bots.FunctionApproximationCar(
-        #     "P3", 
-        #     epsilon_1,
-        #     gamma_1,
-        #     alpha_1,
-        #     epsilon_decay_1,
-        #     min_epsilon_1,
-        # ),
-        # bots.FunctionApproximationCar(
-        #     "P4", 
-        #     epsilon_1,
-        #     gamma_1,
-        #     alpha_1,
-        #     epsilon_decay_1,
-        #     min_epsilon_1,
-        # ),
+        bots.FunctionApproximationCar(
+            "P3", 
+            epsilon_1,
+            gamma_1,
+            alpha_1,
+            epsilon_decay_1,
+            min_epsilon_1,
+        ),
+        bots.FunctionApproximationCar(
+            "P4", 
+            epsilon_1,
+            gamma_1,
+            alpha_1,
+            epsilon_decay_1,
+            min_epsilon_1,
+        ),
     ]
 
     for i, p in enumerate(players):
         p.checkpoints = CHECKPOINTS
-        p.load_weights(f'checkpoints_500_0.pth')
+        # p.load_weights(f'checkpoints_500_{i}.pth')
         final_results[p.get_name()] = 0
 
     start_before = time()

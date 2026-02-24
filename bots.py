@@ -50,6 +50,7 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
         self.rewards_dict = defaultdict(dict)
         self.eval_flag = eval_flag
         self.checkpoints = None
+        self.last_non_zero_car_dist = None
 
         self.gamma = gamma
         self.alpha = alpha
@@ -106,7 +107,14 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
         vel = 2 * car.vel * (cos - 0.5)
         distances, car_distances, sin, _, _ = state
         right, right_front, front, left_front, left, back = distances
-        back_car, front_car = car_distances[[-2, -6]]
+
+        if np.all(car_distances > 0.0):
+            self.last_non_zero_car_dist = car_distances.copy()
+        elif self.last_non_zero_car_dist is not None:
+            car_distances = self.last_non_zero_car_dist.copy()
+            
+        # prawo, prawo przod, przod, lewo przod, lewo, lewo tyl, tyl, prawo tyl
+        right_car, right_front_car, front_car, left_front_car, left_car, left_back_car, back_car, right_back_car = car_distances
 
         steering_weight = 100 * abs(sin)
         def add(delta, reason):
@@ -116,9 +124,6 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
                 self.rewards_dict[action][reason] = [delta]
             else:
                 self.rewards_dict[action][reason].append(delta)
-
-        # sin dodatni to w prawo. cos ujemny
-        # sin ujemny to w lewo. cos ujemy
 
         if action == 'left':
             if left_front > right_front:
@@ -139,10 +144,12 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
                 add(CLOSE_TURN, "left: right close")
             elif left < right - PROXIMITY:
                 add(-3 * CLOSE_TURN, "left: left closer than right")
+            if right_front_car < 0.1:
+                add(CLOSE_TURN, "car close on the left")
             add(-sin * steering_weight, "left: steering penalty")
         if action != 'left' and (right < 0.2 or right_front < 0.2):
             add(-10.0, "not left but right/right_front close")
-        if action != 'left' and prev_sin < -0.1 and cos < 0.0:
+        if action != 'left' and prev_sin < -0.1 and prev_cos < 0.0:
             add(-30.0, "Left: Heading towards previous checkpoint")
 
 
@@ -165,16 +172,18 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
                 add(CLOSE_TURN, "right: left close")
             elif right < left - PROXIMITY:
                 add(-3 * CLOSE_TURN, "right: right closer than left")
+            if left_front_car < 0.1:
+                add(-3 * CLOSE_TURN, "left: left closer than right")
             add(sin * steering_weight, "right: steering bonus")
         if action != 'right' and (left < 0.2 or left_front < 0.2):
             add(-10.0, "not right but left/left_front close")
-        if action != 'right' and prev_sin > 0.1 and cos < 0.0:
+        if action != 'right' and prev_sin > 0.1 and prev_cos < 0.0:
             add(-30.0, "Right: Heading towards previous checkpoint.")
 
         if action == 'forward':
             if abs(sin) > 0.7:
                 add(-420, "forward: going backwards (sin>0.7)")
-            if left_front > front + 0.1 or right_front > front + 0.1:
+            if left_front > front + 0.15 or right_front > front + 0.1:
                 add(-TURN_INSTEAD_OF_FORWARD, "forward: should turn instead")
             else:
                 add(TURN_INSTEAD_OF_FORWARD, "forward: front is clear")
@@ -183,17 +192,19 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
             if right > front + 0.1:
                 add(-TURN_INSTEAD_OF_FORWARD * 2, "forward: sideways (right>front)")
             if front < 0.2 or front_car < 0.1:
-                add(-car.vel * 2, "forward: wall/car ahead")
-            if back_car < 0.1:
-                add(50, "forward: car behind pushing")
+                add(-car.vel * 10, "forward: wall/car ahead")
+            if back_car < 0.15:
+                add(100 - back_car / 0.15, "forward: car behind pushing")
             elif front_car < 1e-3:
                 add(-420, "forward: bumper collision")
             else:
                 add(4.5 / (car.vel + 1e-2), "forward: speed reward")
-        if action != 'forward' and abs(car.vel) < 0.5:
+        if (action != 'forward' and abs(car.vel) < 0.5) or back_car < 1e-3:
             add(-200, "not forward but nearly stopped")
 
         if action == 'stop':
+            if front_car < 0.15:
+                add(150 - front_car / 0.15, "Slow down not to hit the car in front.")
             if front + 0.2 > left or front + 0.2 > right:
                 add(0.5, "stop: tight space")
             if vel < 0.5:
@@ -208,10 +219,16 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
                 add(-10.0, "backward: front clear, no need")
             if abs(sin) > 0.4:
                 add(0.25, "backward: correcting orientation")
+            if abs(vel) < 0.5 and front_car < 0.05:
+                add(100, "back: slow motion collision with car ahead")
 
         if show:
             print(f'  {"TOTAL":10} | {reward:+10.2f} | vel={car.vel:.2f}')
         
+        if 'Total_reward' not in self.rewards_dict.keys():
+            self.rewards_dict['Total_reward'] = {'Total_reward': []}
+        self.rewards_dict['Total_reward']['Total_reward'].append(reward)
+
         return reward
     
     def get_best_action(self, state: list) -> str:
@@ -220,30 +237,30 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
             best_action_idx = torch.argmax(q_values).item()
         return self.all_possible_actions[best_action_idx]
 
-    # def choose_action(self, state):
-    #     """
-    #     Perform an action based on the input.
+    def choose_manual_action(self, state):
+        """
+        Perform an action based on the input.
 
-    #     Actions:
-    #     - "forward": Move the car forward.
-    #     - "backward": Move the car backward.
-    #     - "left": Turn the car left.
-    #     - "right": Turn the car right.
-    #     - "stop": Reduce the car's speed.
-    #     """
+        Actions:
+        - "forward": Move the car forward.
+        - "backward": Move the car backward.
+        - "left": Turn the car left.
+        - "right": Turn the car right.
+        - "stop": Reduce the car's speed.
+        """
+        print(f'\r{state[1]=}', flush=True, end='')
+        keys = pygame.key.get_pressed()
 
-    #     keys = pygame.key.get_pressed()
-
-    #     if keys[pygame.K_UP]:
-    #         return "forward"
-    #     elif keys[pygame.K_DOWN]:
-    #         return "backward"
-    #     elif keys[pygame.K_LEFT]:
-    #         return "left"
-    #     elif keys[pygame.K_RIGHT]:
-    #         return "right"
-    #     else:
-    #         return "stop"
+        if keys[pygame.K_UP]:
+            return "forward"
+        elif keys[pygame.K_DOWN]:
+            return "backward"
+        elif keys[pygame.K_LEFT]:
+            return "left"
+        elif keys[pygame.K_RIGHT]:
+            return "right"
+        else:
+            return "stop"
 
     def choose_action(self, state: list) -> str:
         if self.eval_flag:
@@ -382,15 +399,18 @@ class FunctionApproximationCar(AbstractCar, nn.Module):
             fig.savefig(f"plots/{key}_{player_num}.png", dpi=120, bbox_inches='tight')
             plt.close(fig)
 
-        for action in self.all_possible_actions:
-            reward_type = self.rewards_dict[action]
-            fig, ax = plt.subplots(figsize=(12, 6))
-            for key, vals in reward_type.items():
-                vals = np.array(vals)
-                window = max(1, len(vals) // 20)
-                roll = np.convolve(vals, np.ones(window)/window, mode='valid')
-                ax.plot(roll, label=key)
-            ax.set_title(f'Plot for {action}.')
-            ax.legend(fontsize=7, loc='center left', bbox_to_anchor=(1, 0.5))
-            fig.savefig(f'./plots/rewards_{action}_{player_num}.png', dpi=120, bbox_inches='tight')
-            plt.close(fig)
+            for action in self.all_possible_actions:
+                reward_type = self.rewards_dict[action]
+                fig, ax = plt.subplots(figsize=(12, 6))
+                for key, vals in reward_type.items():
+                    means = {k: np.mean(v) for k, v in reward_type.items()}
+                    keys = list(means.keys())
+                    vals = list(means.values())
+                    colors = ['green' if v > 0 else 'red' for v in vals]
+                    fig, ax = plt.subplots(figsize=(10, max(3, len(keys) * 0.3)))
+                    ax.barh(keys, vals, color=colors)
+                
+                ax.axvline(0, color='black', linewidth=0.8)
+                ax.set_title(f'Mean reward contribution: {action}')
+                fig.savefig(f'./plots/bar_{action}_{player_num}.png', dpi=120, bbox_inches='tight')
+                plt.close(fig)
