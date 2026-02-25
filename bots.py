@@ -40,7 +40,7 @@ class FunctionApproximationCar(MarcinAbstractCar, nn.Module):
             min_epsilon: float = 0.1, 
             eval_flag: bool = False
         ):
-        AbstractCar.__init__(self, name)
+        MarcinAbstractCar.__init__(self, name)
         nn.Module.__init__(self)
         self.epsilon = epsilon
         self.epsilon_decay = epsilon_decay
@@ -78,6 +78,16 @@ class FunctionApproximationCar(MarcinAbstractCar, nn.Module):
         self.target_network = FunctionApproximationCar.target_network
         self.optim = FunctionApproximationCar.optim
         self.loss = nn.SmoothL1Loss()
+
+    def angle_to_car(self, value):
+        prev_check_x, prev_check_y = value
+        check_diff_x = prev_check_x - self.x
+        check_diff_y = prev_check_y - self.y
+        angle_to_prev_check = math.degrees(math.atan2(check_diff_x, check_diff_y))
+        angle_diff = (self.angle - angle_to_prev_check + 180) % 360 - 180
+        sin = np.sin(np.radians(angle_diff))
+        cos = np.cos(np.radians(angle_diff))
+        return sin, cos 
 
     def get_state(self, cars):
         _, distances = self.get_rays_and_distances(self.track_border_mask)
@@ -119,15 +129,10 @@ class FunctionApproximationCar(MarcinAbstractCar, nn.Module):
         
         return flat_state
 
-    def action_rewards(self, state: list, action: str, cos: float, car, show: bool) -> float:
+    def action_rewards(self, state: list, action: str, cos: float, car) -> float:
         # Dodac kat do poprzedniego checkpointa
-        prev_check_x, prev_check_y = self.checkpoints[(self.checkpoint_index - 6) % len(self.checkpoints)]
-        check_diff_x = prev_check_x - self.x
-        check_diff_y = prev_check_y - self.y
-        angle_to_prev_check = math.degrees(math.atan2(check_diff_x, check_diff_y))
-        angle_diff = (self.angle - angle_to_prev_check + 180) % 360 - 180
-        prev_sin = np.sin(np.radians(angle_diff))
-        prev_cos = np.cos(np.radians(angle_diff)) 
+        prev_sin, prev_cos = self.angle_to_car( self.checkpoints[(self.checkpoint_index - 6) % len(self.checkpoints)] )
+        next_sin, next_cos = self.angle_to_car( self.checkpoints[(self.checkpoint_index + 6) % len(self.checkpoints)] )
 
         reward = 0.0
         vel = 2 * car.vel * (cos - 0.5)
@@ -164,19 +169,19 @@ class FunctionApproximationCar(MarcinAbstractCar, nn.Module):
                 add(-GOOD_SHARP_TURN / 3, "left: could go straight (front>left)")
             if front > left_front:
                 add(-GOOD_SLIGHT_TURN / 3, "left: could go straight (front>left_front)")
-            if right_front < 0.2:
-                add(CLOSE_TURN, "left: right_front close")
-            if right < 0.2:
-                add(CLOSE_TURN, "left: right close")
-            elif left < right - PROXIMITY:
+            if left < right - PROXIMITY:
                 add(-3 * CLOSE_TURN, "left: left closer than right")
             if right_front_car < 0.1:
                 add(CLOSE_TURN, "car close on the left")
+            if left_car < 0.1 and front > 0.2:
+                add(-40, "Stopping with car nearby on left")
             add(-sin * steering_weight, "left: steering penalty")
         if action != 'left' and (right < 0.2 or right_front < 0.2):
             add(-10.0, "not left but right/right_front close")
-        if action != 'left' and prev_sin < -0.1 and prev_cos < 0.0:
-            add(-30.0, "Left: Heading towards previous checkpoint")
+        if action != 'left' and prev_sin < 0 and prev_cos < 0:
+            add(-125.0, "Left: Heading towards previous checkpoint")
+        if action != 'left' and (right_front < 0.175 or right < 0.175):
+            add(-CLOSE_TURN, "left: right close")
 
 
         if action == 'right':
@@ -192,19 +197,19 @@ class FunctionApproximationCar(MarcinAbstractCar, nn.Module):
                 add(-GOOD_SHARP_TURN / 3, "right: could go straight (front>right)")
             if front > right_front:
                 add(-GOOD_SLIGHT_TURN / 3, "right: could go straight (front>right_front)")
-            if left_front < 0.2:
-                add(CLOSE_TURN, "right: left_front close")
-            if left < 0.2:
-                add(CLOSE_TURN, "right: left close")
-            elif right < left - PROXIMITY:
+            if right < left - PROXIMITY:
                 add(-3 * CLOSE_TURN, "right: right closer than left")
             if left_front_car < 0.1:
                 add(-3 * CLOSE_TURN, "left: left closer than right")
+            if right_front_car < 0.1 and front > 0.2:
+                add(-40, "Stopping with car nearby on right")
             add(sin * steering_weight, "right: steering bonus")
         if action != 'right' and (left < 0.2 or left_front < 0.2):
             add(-10.0, "not right but left/left_front close")
-        if action != 'right' and prev_sin > 0.1 and prev_cos < 0.0:
-            add(-30.0, "Right: Heading towards previous checkpoint.")
+        if action != 'right' and prev_sin > 0 and prev_cos < 0:
+            add(-125.0, "Right: Heading towards previous checkpoint.")
+        if action != 'right' and (left < 0.175 or left_front < 0.2):
+            add(-CLOSE_TURN, 'right: left being close')
 
         if action == 'forward':
             if abs(sin) > 0.7:
@@ -221,12 +226,16 @@ class FunctionApproximationCar(MarcinAbstractCar, nn.Module):
                 add(-car.vel * 10, "forward: wall/car ahead")
             if back_car < 0.15:
                 add(100 - back_car / 0.15, "forward: car behind pushing")
-            elif front_car < 1e-3:
-                add(-420, "forward: bumper collision")
+            elif front_car < 0.05:
+                add(-100, "forward: bumper collision")
             else:
-                add(4.5 / (car.vel + 1e-2), "forward: speed reward")
-        if (action != 'forward' and abs(car.vel) < 0.5) or back_car < 1e-3:
+                add(4.5 / (abs(car.vel) + 1e-1), "forward: speed reward")
+        if (action != 'forward' and abs(car.vel) < 0.5) or back_car < 1e-3 and left_front_car > 0.2 and right_front_car > 0.2 and front_car > 0.2:
             add(-200, "not forward but nearly stopped")
+        if action != 'forward' and abs(cos) > 0.8 and np.all(car_distances > 0.15) and not np.any(distances < 0.15) and front_car > 0.4 and left_front_car > 0.3 and right_front_car > 0.3 and left_front < 0.2 and right_front < 0.2 and front > 0.5 and abs(vel) < 4:
+            add(-50, "Being slow")
+        if action != 'forward' and abs(cos) > 0.8 and abs(car.vel) / front < 9 and right > 0.15 and left > 0.15 and front_car > 0.45 and left_front_car > 0.45 and right_front_car > 0.45 and left_front > 0.2 and right_front > 0.2:
+            add(-125, "Should accelerate")
 
         if action == 'stop':
             if front_car < 0.15:
@@ -235,21 +244,22 @@ class FunctionApproximationCar(MarcinAbstractCar, nn.Module):
                 add(0.5, "stop: tight space")
             if vel < 0.5:
                 add(-50.0, "stop: standing still")
-            if car.vel > 2.0:
-                add(3.0, "stop: braking at speed")
+            if car.vel > 5.0:
+                add(10.0, "stop: braking at speed")
 
         if action == 'backward':
+            if abs(cos) > 0.6 and abs(car.vel) > 4 and -0.6 < next_cos < -0.3 and self.checkpoint_index > 10:
+                add(150, "Slow down due to corner")
+            if front_car < 0.05 and car.vel < 1.0:
+                add(200, "Avoid collision")
             if abs(sin) < 0.4:
                 add(-5.0, "backward: facing forward")
             if front > 0.2:
                 add(-10.0, "backward: front clear, no need")
             if abs(sin) > 0.4:
                 add(0.25, "backward: correcting orientation")
-            if abs(vel) < 0.5 and front_car < 0.05:
+            if abs(vel) < 0.5 and front_car < 0.1:
                 add(100, "back: slow motion collision with car ahead")
-
-        if show:
-            print(f'  {"TOTAL":10} | {reward:+10.2f} | vel={car.vel:.2f}')
         
         if 'Total_reward' not in self.rewards_dict.keys():
             self.rewards_dict['Total_reward'] = {'Total_reward': []}
@@ -274,7 +284,6 @@ class FunctionApproximationCar(MarcinAbstractCar, nn.Module):
         - "right": Turn the car right.
         - "stop": Reduce the car's speed.
         """
-        print(f'\r{state[1]=}', flush=True, end='')
         keys = pygame.key.get_pressed()
 
         if keys[pygame.K_UP]:

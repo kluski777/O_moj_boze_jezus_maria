@@ -156,7 +156,7 @@ def action_rewards(state: list, action: str, cos: float, car, show: bool) -> flo
     return reward
 
 
-class FunctionApproximation(AbstractCar):
+class FunctionApproximation(Mar):
     def __init__(self, name, alpha: float, gamma: float, epsilon: float, epsilon_decay: float, min_epsilon: float):
         AbstractCar.__init__(self, name)
         self.alpha = alpha

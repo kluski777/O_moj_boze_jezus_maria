@@ -7,11 +7,9 @@ import numpy as np
 from abstract_car import MarcinAbstractCar
 from utils import scale_image
 import random
-import approximation
 import bots
 
 reload(bots)
-reload(approximation)
 #Based on https://github.com/techwithtim/Pygame-Car-Racer
 
 pygame.init()
@@ -146,21 +144,21 @@ class Game:
 
         for i, car in enumerate(self.cars):
             state = car.get_state(self.cars)
-            prev_indx, _ = car.get_progress()
+            # cos = np.cos(np.radians(car.angle - car.angle_to_checkpoint))
+            # max_arg = np.argmax([car.action_rewards(state, action, cos, car) for action in car.all_possible_actions])
+            # best_action = car.all_possible_actions[max_arg]
 
             action = car.choose_action(state)
             car.perform_action(action)
             car.update_progress(CHECKPOINTS)
-            cos = np.cos(np.radians(car.angle - car.angle_to_checkpoint))
 
-            cur_indx, _ = car.get_progress()
-            next_state = car.get_state(self.cars)
+            # next_state = car.get_state(self.cars)
 
             # to jest w pretrainingu - potem tego next_state'a dodac trzeba
-            reward = car.action_rewards(state, action, cos, car, False) / 1000
+            # reward = car.action_rewards(state, action, cos, car) / 1000
 
             car.previous_action = action
-            car.update_weights(state, action, reward, next_state)
+            # car.update_weights(state, action, reward, next_state)
 
 
     def run(self, show=False) -> list:
@@ -206,7 +204,7 @@ class Game:
 
 def main():
     final_results = dict()
-    last_loop = False
+    last_loop = True
 
     #initializing players - it is possible to play up to 4 players together
     players = [
@@ -250,7 +248,7 @@ def main():
         p.track_border_mask = TRACK_BORDER_MASK
         p.checkpoints = CHECKPOINTS
         # p.load_weights(f'checkpoint_high_{i%2}.pth')
-        p.load_weights(f'on_4_check_{i}.pth')
+        p.load_weights(f'on_4_check_{i}_exp.pth')
         final_results[p.get_name()] = 0
 
     start_before = time()
@@ -290,7 +288,7 @@ def main():
             last_loop = True
 
     for i, player in enumerate(players):
-        player.save_model(f'on_4_check_{i}_2.pth')
+        player.save_model(f'on_4_check_{i}_exp.pth')
     print(final_results)
 
 if __name__ == "__main__":
