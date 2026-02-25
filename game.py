@@ -4,7 +4,7 @@ from time import time
 from importlib import reload
 import pygame
 import numpy as np
-from abstract_car import MarcinAbstractCar
+from marcin_abstract_car import MarcinAbstractCar
 from utils import scale_image
 import random
 import bots

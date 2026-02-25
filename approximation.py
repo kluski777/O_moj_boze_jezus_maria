@@ -2,7 +2,7 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import defaultdict
-from abstract_car import AbstractCar
+from marcin_abstract_car import AbstractCar
 from constants import *
 
 
