@@ -1,7 +1,9 @@
+import math
+import cv2
 import pygame
+import torch
 from abstract_car import AbstractCar
 from utils import scale_image
-from itertools import permutations
 from collections import deque
 import numpy as np
 
@@ -38,7 +40,7 @@ track_path =  [(175, 119), (110, 70), (56, 133), (70, 481), (318, 731), (404, 68
 
 
 # Interpolate evenly spaced checkpoints
-def generate_checkpoints(track_path, num_checkpoints=1000): # 100 powinno wystarczyc
+def generate_checkpoints(track_path, num_checkpoints=250): # 1000 powinno wystarczyc
     checkpoints = []
     for i in range(len(track_path) - 1):
         x1, y1 = track_path[i]
@@ -55,6 +57,108 @@ CHECKPOINTS = generate_checkpoints(track_path)
 def draw_checkpoints(win, checkpoints):
     for x, y in checkpoints:
         pygame.draw.circle(win, (0, 255, 0), (x, y), 5)
+
+
+def save_plots(actor_losses, critic_losses, rewards_history, entropy_losses, ratios,
+               layer_norms_history, critic_values, value_stds, states_stds, explained_variances,
+               latest_values, latest_returns):
+    import matplotlib.pyplot as plt
+
+    ROWS, COLS = 4, 3
+    fig, axes = plt.subplots(ROWS, COLS, figsize=(18, 20))
+    fig.suptitle('Training diagnostics', fontsize=14)
+    axs = axes.flatten()
+
+    single = [
+        (actor_losses,        'Actor loss'),
+        (critic_losses,       'Critic loss'),
+        (rewards_history,     'Rollout reward'),
+        (entropy_losses,      'Entropy loss'),
+        (ratios,              'Mean PPO ratio'),
+        (critic_values,       'Mean critic value'),
+        (value_stds,          'Critic value std'),
+        (states_stds,         'States std (batch)'),
+        (explained_variances, 'Explained variance'),
+    ]
+
+    for ax, (data, title) in zip(axs, single):
+        ax.plot(data)
+        ax.set_title(title)
+        ax.set_xlabel('rollout')
+
+    # update-to-weight ratio per layer (Karpathy): |Δw|/|w|, healthy ≈ 1e-3
+    ax = axs[len(single)]
+    if layer_norms_history:
+        keys = list(layer_norms_history[0].keys())
+        import matplotlib.cm as mplcm
+        cmap = mplcm.get_cmap('tab20', len(keys))
+        for i, key in enumerate(keys):
+            vals = [d[key] for d in layer_norms_history]
+            ax.plot(vals, label=key, color=cmap(i))
+    ax.axhline(1e-3, color='k', linestyle='--', linewidth=1, label='1e-3 target')
+    ax.set_yscale('log')
+    ax.set_title('Update/weight ratio per layer')
+    ax.set_xlabel('rollout')
+    ax.legend(fontsize=6, ncol=3)
+
+    # scatter: critic V(s) vs GAE returns
+    ax = axs[len(single) + 1]
+    ax.scatter(latest_returns, latest_values, s=2, alpha=0.3)
+    lo = min(latest_returns.min(), latest_values.min())
+    hi = max(latest_returns.max(), latest_values.max())
+    ax.plot([lo, hi], [lo, hi], 'r--', linewidth=1)
+    ax.set_title('V(s) vs returns')
+    ax.set_xlabel('returns')
+    ax.set_ylabel('V(s)')
+
+    for ax in axs[len(single) + 2:]:
+        ax.set_visible(False)
+
+    plt.tight_layout()
+    plt.savefig('diagnostics.png', dpi=120)
+    plt.close(fig)
+
+
+def capture_frame(surface):
+    """Capture surface → 256x256 grayscale float32 in [0,1]."""
+    rgb  = pygame.surfarray.array3d(surface).transpose(1, 0, 2).astype(np.uint8)  # (H,W,3)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    gray = cv2.resize(gray, (256, 256), interpolation=cv2.INTER_LINEAR)
+    return gray.astype(np.float32) / 255.0
+
+def _minmax(arr):
+    lo, hi = arr.min(), arr.max()
+    return (arr - lo) / (hi - lo + 1e-8)
+
+def build_state(frames):
+    grays = list(frames)  # oldest -> newest
+    while len(grays) < 4:
+        grays.insert(0, grays[0])
+    # [newest, newest - prev, prev - prev2, prev2 - prev3]
+    channels = [
+        grays[3],
+        _minmax(grays[3] - grays[2]),
+        _minmax(grays[2] - grays[1]),
+        _minmax(grays[1] - grays[0]),
+    ]
+    return torch.FloatTensor(np.stack(channels))
+
+
+def show_frames(state):
+    """Plot all frames of a stacked state (C, H, W) in one grid figure."""
+    import matplotlib.pyplot as plt
+    frames = state.detach().cpu().numpy()
+    n = len(frames)
+    fig, axes = plt.subplots(1, n, figsize=(3 * n, 3))
+    if n == 1:
+        axes = [axes]
+    for i, (ax, frame) in enumerate(zip(axes, frames)):
+        ax.imshow(frame, cmap='gray', vmin=0.0, vmax=1.0)
+        ax.set_title(f'frame {i}')
+        ax.axis('off')
+    plt.tight_layout()
+    plt.show()
+    plt.close(fig)
 
 
 # Actor - Critic gotta be
@@ -93,15 +197,17 @@ class Game:
 
     def draw(self):
         """Draw the background and all cars."""
+
         for img, pos in self.images:
             self.win.blit(img, pos)
 
         for car in self.cars:
             car.draw(self.win)
-            car.draw_rays(self.win, TRACK_BORDER_MASK)
+            # car.draw_rays(self.win, TRACK_BORDER_MASK)
 
-        self.frames.append(pygame.surfarray.array3d(self.win).transpose(1, 0, 2))
+        # draw_checkpoints(self.win, CHECKPOINTS)
         pygame.display.update()
+        self.frames.append(capture_frame(self.win))
 
     def check_collisions(self):
 
@@ -133,43 +239,123 @@ class Game:
         return finished
 
     def move_cars(self):
-        """Handle car movements."""
+        state = build_state(self.frames)
 
+        reward = 0.0
         for car in self.cars:
             car.update_progress(CHECKPOINTS)
 
+        # "right", "back-right", "back", "back-left", "left", "front-left", "front", "front-right"
         for car in self.cars:
+            action = car.choose_action(state.unsqueeze(0))
             _, distances = car.get_rays_and_distances(TRACK_BORDER_MASK)
-            car_distances = car.get_distances_to_cars(self.cars)
-            car.perform_action(car.choose_action([distances, car_distances, car.get_progress(), CHECKPOINTS]))
+            right, back_right, back, back_left, left, front_left, front, front_right = distances
+
+            # kary za bycie zbyt blisko do sciany
+            if front < 15:
+                print('za blisko do przodu')
+                reward += (front - 15) / 150
+            if front_left < 15:
+                print('za blisko przod lewa')
+                reward += (front_left - 15) / 150
+            if front_right < 15:
+                print('za blisko przod prawa')
+                reward += (front_right - 15) / 150
+
+            print(f'{action=}')
+            car.perform_action(action)
+
+        return state, reward
 
     def run(self):
         """Main game loop."""
-        who_finished_first = []
-        while self.running and len(self.cars) != 0:
+        who_finished_first  = []
+        car                 = self.cars[0]
+        steps_since_checkpoint = 0
+        rollout_reward      = 0.0
+        actor_losses        = []
+        critic_losses       = []
+        rewards_history     = []
+        entropy_losses      = []
+        ratios              = []
+        layer_norms_history = []
+        critic_values       = []
+        value_stds          = []
+        states_stds         = []
+        explained_variances = []
+
+        self.draw()  # seed self.frames before first move_cars
+
+        while self.running and len(self.cars) > 0:
+            checkpoint_idx_bef = car.get_progress()[0]
             self.clock.tick(self.fps)
-            draw_checkpoints(self.win, CHECKPOINTS)
-            pygame.display.update()
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
 
-
-            self.move_cars()
+            state, reward = self.move_cars()
             self.check_collisions()
             finish_lines = self.check_finish_line()
-            if len(finish_lines) != 0:
+            done = len(finish_lines) > 0 or not self.running
+            if finish_lines:
                 who_finished_first.append(finish_lines)
 
             self.draw()
-            break
+            next_state = build_state(self.frames)
 
+            if self.cars:
+                checkpoint_idx_now = car.get_progress()[0]
+                if checkpoint_idx_now != checkpoint_idx_bef:
+                    # reward += 1
+                    steps_since_checkpoint = 0
+                else:
+                    steps_since_checkpoint += 1
+
+            cx, cy    = car.get_center()
+            cp        = CHECKPOINTS[car.checkpoint_index % len(CHECKPOINTS)]
+            to_cp     = (cp[0] - cx, cp[1] - cy)
+            cp_dist   = math.sqrt(to_cp[0]**2 + to_cp[1]**2)
+            to_cp     = (to_cp[0] / cp_dist, to_cp[1] / cp_dist)
+            angle_rad = math.radians(car.angle)
+            heading   = (-math.sin(angle_rad), -math.cos(angle_rad))
+            cos_a     = heading[0] * to_cp[0] + heading[1] * to_cp[1]
+            reward   += cos_a * car.vel / 8
+
+            if steps_since_checkpoint >= 128:
+                done = True
+                steps_since_checkpoint = 0
+                car.reset()
+                print('reset.\n')
+                car.set_position((180, 200))
+                self.draw()
+
+            rollout_reward += reward
+            car.store(state, car._last_action, car._last_log_prob, reward, done)
+            # show_frames(next_state)
+
+            a_loss, c_loss, e_loss, ratio, lnorms, cval, vstd, sstd, ev, v_arr, r_arr = car.update(next_state.unsqueeze(0))
+            if a_loss is not None:
+                actor_losses.append(a_loss)
+                critic_losses.append(c_loss)
+                entropy_losses.append(e_loss)
+                ratios.append(ratio)
+                layer_norms_history.append(lnorms)
+                critic_values.append(cval)
+                value_stds.append(vstd)
+                states_stds.append(sstd)
+                explained_variances.append(ev)
+                rewards_history.append(rollout_reward)
+                rollout_reward = 0.0
+                save_plots(actor_losses, critic_losses, rewards_history, entropy_losses, ratios,
+                           layer_norms_history, critic_values, value_stds, states_stds, explained_variances,
+                           v_arr, r_arr)
+                print(f"Update #{len(actor_losses):4d} | actor={a_loss:.4f}  critic={c_loss:.4f}  entropy={e_loss:.4f}  ratio={ratio:.4f}  value={cval:.4f}  vstd={vstd:.4f}  sstd={sstd:.4f}  ev={ev:.4f}  reward={rewards_history[-1]:.3f}")
 
         pygame.quit()
         print("Game over!")
         print(who_finished_first)
-        return who_finished_first
+        return who_finished_first, actor_losses, critic_losses, rewards_history
 
 
 class PlayerCar2(AbstractCar):
@@ -179,30 +365,6 @@ class PlayerCar2(AbstractCar):
         super().__init__(name)
 
     def choose_action(self, state):
-        """
-        Determines the next action for the car based on the current state of the environment.
-
-        Parameters:
-            state (list): A 3-element list representing the car's current state:
-                - state[0]: A list of 8 float values representing distances to the track border
-                            in 8 directions (every 45 degrees, starting from forward).
-                - state[1]: A list of 8 float values representing distances to the nearest car
-                            in the same 8 directions.
-                - state[2]: A 2-element list representing progress information:
-                            - state[2][0]: The index of the closest checkpoint.
-                            - state[2][1]: The car's progress, e.g., distance to the next checkpoint
-                                               or normalized progress value.
-
-        Returns:
-            - "forward": Move the car forward.
-            - "backward": Move the car backward.
-            - "left": Turn the car left.
-            - "right": Turn the car right.
-            - "stop": Reduce the car's speed.
-            """
-
-        """INSERT YOUR CODE HERE"""
-
         keys = pygame.key.get_pressed()
 
         if keys[pygame.K_w]:
@@ -217,38 +379,28 @@ class PlayerCar2(AbstractCar):
             return "stop"
 
 def main():
+    import os
+    from model import ActorCritic
 
-    final_results = dict()
+    car = ActorCritic("P1", feature_dim=256, lr=1e-3)
 
-    #initializing players - it is possible to play up to 4 players together
-    players = [PlayerCar2("P1")]
+    if os.path.exists('weights.pth'):
+        car.load_state_dict(torch.load('weights.pth', map_location=car.device))
+        print("Loaded weights from weights.pth")
 
-    for p in players:
-        final_results[p.get_name()] = 0
+    # car = PlayerCar2("P1")
 
-    perm = permutations(players)
+    game = Game(WIDTH, HEIGHT, FPS)
+    game.add_car(car)
 
-    for p in perm:
+    try:
+        game.run()
+    except KeyboardInterrupt:
+        print("Interrupted.")
+    finally:
+        torch.save(car.state_dict(), 'weights.pth')
+        print("Saved weights to weights.pth")
 
-        print(p)
-
-        game = Game(WIDTH, HEIGHT, FPS)
-
-        # Add cars
-        for player in p:
-            game.add_car(player)
-
-        # Run the game
-        temp_rank = game.run()
-
-        points = len(players)
-
-        for tr in temp_rank:
-            for t in tr:
-                final_results[t] += points
-            points -= 1
-
-    print(final_results)
 
 if __name__ == "__main__":
     main()
