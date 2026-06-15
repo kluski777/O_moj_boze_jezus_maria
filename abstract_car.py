@@ -234,7 +234,7 @@ class AbstractCar:
             distance = math.sqrt((self.x - checkpoint_x) ** 2 + (self.y - checkpoint_y) ** 2)
 
             # If the car is close enough to the checkpoint, move to the next one
-            if distance < 40:  # Adjust the threshold as needed
+            if distance < 60:  # Adjust the threshold as needed
                 self.checkpoint_index += 1
                 self.progress_distance += distance
 

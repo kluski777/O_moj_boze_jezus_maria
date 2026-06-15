@@ -1,0 +1,314 @@
+\documentclass[12pt,a4paper,twocolumn]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[polish]{babel}
+\usepackage[margin=1.8cm]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{array}
+\usepackage{microtype}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{blue},
+  commentstyle=\color{gray},
+  frame=single,
+  breaklines=true,
+  language=Python,
+}
+
+\title{\textbf{Autonomiczny samochód wyścigowy\\z użyciem Proximal Policy Optimisation}\\
+       \large Projekt -- Głębokie Uczenie ze Wzmocnieniem}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+%------------------------------------------------------------
+\section{Opis problemu}
+
+Celem projektu jest nauczenie agenta autonomicznego pokonywania okrążeń na dwuwymiarowym torze wyścigowym bez żadnej zakodowanej na stałe strategii jazdy.
+Środowisko opiera się na symulacji Pygame. Agent otrzymuje wyłącznie informację wizualną -- wycinek obrazu wyśrodkowany na pojeździe -- i uczy się sterowania wyłącznie na podstawie sygnału nagrody.
+
+%------------------------------------------------------------
+\section{Środowisko}
+
+\subsection{Symulacja}
+
+Tor jest stałą jednopętlową trasą o rozdzielczości $810 \times 810$ pikseli.
+Silnik fizyczny pochodzi z klasy \texttt{AbstractCar}: pojazd ma ciągłą prędkość i kąt obrotu oraz pięć dyskretnych akcji (\textit{przód}, \textit{tył}, \textit{lewo}, \textit{prawo}, \textit{stop}).
+Zderzenie z granicą toru wywołuje \texttt{bounce()}, co neguje prędkość.
+
+Aby zmaksymalizować przepustowość treningu, zegar symulacji jest ustawiony na (\texttt{FPS = 10000}).
+
+\subsection{Cykl epizodu}
+
+Epizod zaczyna się, gdy samochód zostaje umieszczony w pozycji startu o współrzędnych $(180, 200)$.
+Kończy się -- a pojazd natychmiast wraca na start -- w dwóch przypadkach:
+
+\begin{itemize}
+  \item \textbf{Ukończenie okrążenia}: samochód przejeżdża przez linię mety z właściwego kierunku. Zdarzenie to jest odnotowywane jako \emph{sukces}; licznik okrążeń rośnie, a trening jest kontynuowany bez przerwy.
+  \item \textbf{Przekroczenie limitu czasu}: pojazd przez $n$ kolejnych kroków nie zalicza żadnego nowego punktu kontrolnego. Zdarzenie jest odnotowywane jako \emph{porażka}. Wartość zmiennej $n$ była zmienna zależnie od etapu treningu, początkowo wynosiła ona 128 potem zwiększoną tą wartość do 1024.
+\end{itemize}
+
+Bufor ramek oraz licznik postępu na checkpointach są czyszczone przy każdym resecie gry, tak aby nowy epizod startował z czystego stanu.
+
+%------------------------------------------------------------
+\section{Przestrzeń obserwacji}
+
+\subsection{Mapa toru}
+
+Zamiast pikseli RGB środowisko utrzymuje statyczną mapę \texttt{TRACK\_MAP} o kształcie $(H, W)$ (ta sama rozdzielczość co okno gry).
+Jest ona obliczana raz przy starcie na podstawie kanału alfa sprite'a krawężnika:
+
+\begin{equation}
+  \texttt{TRACK\_MAP}[r,c] =
+  \begin{cases}
+    0{,}0 & \text{jeśli } \alpha[r,c] > 0 \;\; (\text{ściana}) \\
+    0{,}5 & \text{w przeciwnym razie} \;\; (\text{jezdnia})
+  \end{cases}
+\end{equation}
+
+Przy generowaniu każdej ramki do mapy dokładane są dynamicznie cztery wartości semantyczne:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+  \toprule
+  Wartość & Znaczenie \\
+  \midrule
+  0,0 & Ściana / poza obrębem toru \\
+  0,5 & Jezdnia \\
+  0,75 & Kolejne 30 checkpointów \\
+  1,0 & Karoseria pojazdu \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Wycinek egocentryczny}
+
+Z mapy semantycznej wycinany jest obszar $256\times256$ pikseli za pomocą odwrotnej transformacji afinicznej (\texttt{cv2.warpAffine} z flagami \texttt{WARP\_INVERSE\_MAP | INTER\_NEAREST}), tak że:
+
+\begin{itemize}
+  \item Kierunek jazdy samochodu zawsze wskazuje \emph{górę} obrazu wyjściowego.
+  \item Pojazd jest zakotwiczony blisko \emph{dolnego środka} ramki (wiersz $r_\text{car} = 256 - h/2 - 2$, gdzie $h$ to wysokość sprite'a), co maksymalizuje widoczność toru przed autem.
+\end{itemize}
+
+Macierz transformacji ma postać:
+\begin{equation}
+  M =
+  \begin{bmatrix}
+    \cos\theta & \sin\theta & t_x \\
+    -\sin\theta & \cos\theta & t_y
+  \end{bmatrix}
+\end{equation}
+\begin{equation}
+  t_x = c_x - (\cos\theta \cdot 128 + \sin\theta \cdot r_\text{car})
+\end{equation}
+\begin{equation}
+  t_y = c_y - (-\sin\theta \cdot 128 + \cos\theta \cdot r_\text{car})
+\end{equation}
+
+gdzie $(c_x, c_y)$ to środek samochodu, a $\theta$ jego kąt obrotu.
+
+Aby nanieść punkt kontrolny ze współrzędnych światowych $(w_x, w_y)$ na obraz wyjściowy, transformacja jest odwracana analitycznie (obrót jest ortogonalny, więc odwrotność to transpozycja):
+
+\begin{equation}
+  \begin{pmatrix}\text{col}\\\text{row}\end{pmatrix}
+  =
+  \begin{bmatrix}
+    \cos\theta & -\sin\theta \\
+    \sin\theta & \cos\theta
+  \end{bmatrix}
+  \begin{pmatrix} w_x - t_x \\ w_y - t_y \end{pmatrix}
+\end{equation}
+
+Każdy z kolejnych 30 punktów kontrolnych jest rysowany jako wypełnione koło o promieniu 5 pikseli i wartości 0,75.
+
+\subsection{Stos klatek}
+
+Cztery kolejne semantyczne klatki są łączone wzdłuż osi kanałów, dając tensor stanu $s \in \mathbb{R}^{4 \times 256 \times 256}$.
+Jeśli dostępnych jest mniej niż cztery klatki (np. na początku epizodu), pierwsza dostępna klatka jest powielana.
+
+%------------------------------------------------------------
+\section{Przestrzeń akcji}
+
+Agent wybiera jedną z pięciu dyskretnych akcji w każdym kroku:
+
+\begin{center}
+\begin{tabular}{@{}cll@{}}
+  \toprule
+  Indeks & Nazwa & Efekt \\
+  \midrule
+  0 & przód  & Przyspieszenie \\
+  1 & tył    & Hamowanie / cofanie \\
+  2 & lewo   & Skręt w lewo \\
+  3 & prawo  & Skręt w prawo \\
+  4 & stop   & Stopniowe spowalnianie \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+%------------------------------------------------------------
+\section{Funkcja nagrody}
+
+Skalarna nagroda $r_t$ w każdym kroku składa się z trzech składników.
+
+\paragraph{Nagroda za postęp.}
+Iloczyn skalarny wektora kierunku jazdy $\hat{h}$ i jednostkowego wektora $\hat{d}$ wskazującego na kolejny punkt kontrolny, skalowany aktualną prędkością $v$:
+\begin{equation}
+  r_\text{postęp} = (\hat{h} \cdot \hat{d}) \cdot \frac{v}{8}
+\end{equation}
+gdzie $\hat{h} = (-\sin\alpha, -\cos\alpha)$ (konwencja Pygame, oś $y$ skierowana w dół), a $\hat{d}$ to znormalizowany wektor od środka samochodu do najbliższego checkpointu.
+
+\paragraph{Kara za bliskość ściany.}
+Trzy promienie (przodem, przód-lewo, przód-prawo) mierzą odległość do krawężnika.
+Jeśli którakolwiek jest poniżej 15 pikseli, naliczana jest ujemna kara:
+\begin{equation}
+  r_\text{ściana} = \sum_{d \in \{d_f,\, d_{fl},\, d_{fr}\}}
+    \mathbf{1}[d < 15]\cdot\frac{d - 15}{25}
+\end{equation}
+Uderzenie w ścianę jest odnotowywane do statystyk, jeśli $r_\text{ściana} < 0$.
+
+\paragraph{Kara za czas.}
+Stała wartość $-0{,}025$ na krok zniechęca do stania w miejscu:
+\begin{equation}
+  r_t = r_\text{postęp} + r_\text{ściana} - 0{,}025
+\end{equation}
+
+%------------------------------------------------------------
+\section{Architektura sieci}
+
+Polityka i funkcja wartości dzielą konwolucyjny kręgosłup (\textit{backbone}) i rozgałęziają się na oddzielne głowice MLP.
+Utrzymywane są trzy niezależne optymalizatory Adam (po jednym na podsieci), ale wszystkie wykonują krok na tej samej zagregowanej stracie.
+
+\subsection{Backbone}
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+  \toprule
+  Warstwa & Parametry \\
+  \midrule
+  Conv2d $\to$ GroupNorm $\to$ GELU & $4{\to}32$, $k{=}5$, $s{=}4$ \\
+  Conv2d $\to$ GroupNorm $\to$ GELU & $32{\to}64$, $k{=}5$, $s{=}2$ \\
+  Conv2d $\to$ GroupNorm $\to$ GELU & $64{\to}96$, $k{=}5$, $s{=}1$ \\
+  Conv2d $\to$ GroupNorm $\to$ GELU & $96{\to}96$, $k{=}3$, $s{=}2$ \\
+  Flatten & --- \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{GroupNorm(1, C)} traktuje cały map przestrzenny każdego kanału jako jedną grupę, co odpowiada LayerNorm po wymiarach $(C,H,W)$.
+
+\subsection{Głowica aktora}
+
+\[
+\begin{aligned}
+  &\xrightarrow{\text{LazyLinear}(128)} \text{GELU} \\
+  &\xrightarrow{\text{Linear}(64)} \text{GELU} \\
+  &\xrightarrow{\text{Linear}(5)} \text{Softmax} \to \pi(a|s)
+\end{aligned}
+\]
+
+\subsection{Głowica krytyka}
+
+\[
+\begin{aligned}
+  &\xrightarrow{\text{LazyLinear}(128)} \text{GELU} \\
+  &\xrightarrow{\text{Linear}(64)} \text{GELU} \\
+  &\xrightarrow{\text{Linear}(1)} \text{V(s)}
+\end{aligned}
+\]
+
+(\texttt{feature\_dim = 256}, więc rozmiary warstw ukrytych wynoszą kolejno $128$ i $64$.)
+
+\section{Algorytm uczenia: PPO}
+
+\subsection{Zbieranie danych (rollout)}
+
+Agent wchodzi w interakcję ze środowiskiem przez $N = 2048$ kroków przed jakąkolwiek aktualizacją parametrów.
+W każdym kroku zapisywana jest krotka $(s_t, a_t, \log\pi_\text{old}(a_t|s_t), r_t, \text{done}_t)$ na CPU.
+
+\subsection{Uogólniona estymacja przewagi (GAE)}
+
+Wartości $V(s_t)$ dla wszystkich stanów rollout są obliczane w jednym wsadowym przebiegu do przodu (bez gradientów).
+Wartość bootstrapowa $V(s_N)$ jest szacowana, jeśli ostatni krok nie był terminalny.
+Przewagi są obliczane metodą GAE~\cite{schulman2015high}:
+
+\begin{equation}
+  \delta_t = r_t + \gamma V(s_{t+1})(1-d_t) - V(s_t)
+\end{equation}
+\begin{equation}
+  \hat{A}_t = \sum_{l=0}^{\infty} (\gamma\lambda)^l \delta_{t+l},
+  \quad \gamma = 0{,}99,\;\; \lambda = 0{,}95
+\end{equation}
+
+Zwroty to $\hat{R}_t = \hat{A}_t + V(s_t)$.
+Przewagi są następnie normalizowane do zerowej średniej i jednostkowej wariancji w obrębie całego rollout.
+
+\subsection{Aktualizacja PPO}
+
+Przez $K = 8$ epok rollout jest tasowany i przetwarzany w mini-batchach po $32$ próbki.
+Łączna strata to:
+\begin{equation}
+  \mathcal{L} = \mathcal{L}_\text{aktor} + \mathcal{L}_\text{krytyk} + \mathcal{L}_\text{entropia}
+\end{equation}
+
+\paragraph{Strata aktora (przycięty surogat).}
+\begin{equation}
+  \mathcal{L}_\text{aktor} = -\mathbb{E}\!\left[
+    \min\!\left(
+      r_t(\theta)\hat{A}_t,\;
+      \operatorname{clip}(r_t(\theta), 1{-}\varepsilon, 1{+}\varepsilon)\hat{A}_t
+    \right)
+  \right]
+\end{equation}
+gdzie $r_t(\theta) = \pi_\theta(a_t|s_t)/\pi_\text{old}(a_t|s_t)$ oraz $\varepsilon = 0{,}1$.
+
+\paragraph{Strata krytyka.}
+Błąd średniokwadratowy między przewidywanymi wartościami a zwrotami GAE:
+\begin{equation}
+  \mathcal{L}_\text{krytyk} = \mathbb{E}\!\left[(V_\theta(s_t) - \hat{R}_t)^2\right]
+\end{equation}
+
+\paragraph{Bonus entropii.}
+\begin{equation}
+  \mathcal{L}_\text{entropia} = -\beta_H \,\mathbb{E}[\mathcal{H}(\pi_\theta(\cdot|s_t))],
+\end{equation}
+Gdzie współczynnik $\beta$ był dostosowywany zależnie od etapu treningu ręcznie (początkowo był wysoki wraz z czasem był zmniejszany). 
+
+\subsection{Optymalizacja}
+
+Trzy niezależne optymalizatory Adam ze wspólnym współczynnikiem uczenia obsługują odpowiednio: backbone, głowicę aktora i głowicę krytyka.
+Normy gradientów są przycinane do wartości $3{,}0$ niezależnie dla każdej podsieci. Wartość stałej uczenia była zmienna zależnie od etapu treningu.
+
+\subsection{Zestawienie hiperparametrów}
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+  \toprule
+  Hiperparametr & Wartość \\
+  \midrule
+  Długość rollout $N$ & 2048 \\
+  Liczba epok PPO $K$ & 8 \\
+  Rozmiar mini-batcha & 32 \\
+  $\gamma$ & 0,99 \\
+  $\lambda$ & 0,95 \\
+  Parametr przycinania $\varepsilon$ & 0,1 \\
+  Przycinanie gradientów & 3,0 \\
+  Wymiar cech & 256 \\
+  Limit bez postępu & 2048 kroków \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\end{document}
